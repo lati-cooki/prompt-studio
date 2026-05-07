@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Prompt Registry v0.1</title>
+<style>
+  :root {
+    --bg-primary: #ffffff;
+    --bg-secondary: #f7f5ef;
+    --bg-tertiary: #f0eee5;
+    --text-primary: #1a1a18;
+    --text-secondary: #5f5e5a;
+    --text-tertiary: #888780;
+    --border-tertiary: rgba(0, 0, 0, 0.12);
+    --border-secondary: rgba(0, 0, 0, 0.25);
+    --border-info: #185fa5;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --font-mono: "SF Mono", "Monaco", "Inconsolata", "Roboto Mono", monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg-primary: #1a1a18;
+      --bg-secondary: #232321;
+      --bg-tertiary: #2c2c2a;
+      --text-primary: #f0eee5;
+      --text-secondary: #b4b2a9;
+      --text-tertiary: #888780;
+      --border-tertiary: rgba(255, 255, 255, 0.15);
+      --border-secondary: rgba(255, 255, 255, 0.3);
+    }
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    font-family: var(--font-sans);
+    color: var(--text-primary);
+    background: var(--bg-tertiary);
+    margin: 0;
+    padding: 2rem 1rem;
+    line-height: 1.7;
+  }
+
+  .container {
+    max-width: 720px;
+    margin: 0 auto;
+    background: var(--bg-primary);
+    border-radius: var(--radius-lg);
+    padding: 2rem;
+    border: 0.5px solid var(--border-tertiary);
+  }
+
+  h1 { font-size: 22px; font-weight: 500; margin: 0 0 4px; }
+  .meta-line { font-size: 13px; color: var(--text-secondary); margin: 0 0 1.5rem; }
+
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    margin-bottom: 1.5rem;
+  }
+  .stat {
+    background: var(--bg-secondary);
+    padding: 12px;
+    border-radius: var(--radius-md);
+  }
+  .stat-label { font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }
+  .stat-val { font-size: 22px; font-weight: 500; }
+
+  .controls {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 1rem;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .filter-btn, select, button {
+    font-family: var(--font-sans);
+    font-size: 13px;
+    background: transparent;
+    border: 0.5px solid var(--border-secondary);
+    border-radius: var(--radius-md);
+    padding: 6px 12px;
+    color: var(--text-primary);
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .filter-btn:hover, button:hover { background: var(--bg-secondary); }
+  .filter-btn.active { background: var(--bg-secondary); border-color: var(--border-secondary); }
+  .spacer { flex: 1; }
+
+  .row {
+    background: var(--bg-primary);
+    border: 0.5px solid var(--border-tertiary);
+    border-radius: var(--radius-lg);
+    padding: 12px 16px;
+    cursor: pointer;
+    margin-bottom: 8px;
+    transition: border-color 0.1s;
+  }
+  .row:hover { border-color: var(--border-secondary); }
+  .row.expanded { border-color: var(--border-info); }
+
+  .row-main {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .row-id-block { flex: 1; min-width: 0; }
+  .row-id { display: flex; align-items: baseline; gap: 8px; }
+  .row-id .id { font-family: var(--font-mono); font-weight: 500; font-size: 13px; }
+  .row-id .ver { font-size: 12px; color: var(--text-secondary); }
+  .row-use { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+
+  .badges { display: flex; gap: 6px; align-items: center; }
+  .badge {
+    display: inline-block;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: var(--radius-md);
+    font-weight: 500;
+  }
+  .b-prod { background: #EAF3DE; color: #27500A; }
+  .b-active { background: #E6F1FB; color: #0C447C; }
+  .b-draft { background: #FAEEDA; color: #633806; }
+  .b-deprecated { background: #F1EFE8; color: #444441; }
+  .b-tier-audit { background: #EEEDFE; color: #3C3489; }
+  .b-tier-advisory { background: #E1F5EE; color: #085041; }
+  .b-tier-reference { background: #F1EFE8; color: #444441; }
+
+  @media (prefers-color-scheme: dark) {
+    .b-prod { background: #173404; color: #C0DD97; }
+    .b-active { background: #0C447C; color: #B5D4F4; }
+    .b-draft { background: #412402; color: #FAC775; }
+    .b-deprecated { background: #2C2C2A; color: #D3D1C7; }
+    .b-tier-audit { background: #26215C; color: #CECBF6; }
+    .b-tier-advisory { background: #04342C; color: #9FE1CB; }
+    .b-tier-reference { background: #2C2C2A; color: #D3D1C7; }
+  }
+
+  .row-cost { text-align: right; min-width: 70px; }
+  .row-cost-amt { font-size: 13px; font-weight: 500; }
+  .row-cost-tok { font-size: 12px; color: var(--text-secondary); }
+
+  .detail {
+    display: none;
+    padding-top: 12px;
+    margin-top: 12px;
+    border-top: 0.5px solid var(--border-tertiary);
+  }
+  .row.expanded .detail { display: block; }
+
+  .kv {
+    display: grid;
+    grid-template-columns: 110px 1fr;
+    gap: 4px 12px;
+    font-size: 12px;
+    margin-bottom: 12px;
+  }
+  .kv dt { color: var(--text-secondary); }
+  .kv dd { margin: 0; }
+  .kv .mono { font-family: var(--font-mono); }
+
+  .actions { display: flex; gap: 6px; flex-wrap: wrap; }
+  .actions button { font-size: 12px; padding: 4px 10px; }
+
+  .footer {
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 0.5px solid var(--border-tertiary);
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+
+  .info-banner {
+    background: var(--bg-secondary);
+    border: 0.5px solid var(--border-tertiary);
+    border-radius: var(--radius-md);
+    padding: 12px 16px;
+    margin-bottom: 1.5rem;
+    font-size: 13px;
+  }
+  .info-banner strong { font-weight: 500; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>Prompt registry</h1>
+<p class="meta-line">v0.1 · 7 entries · 2 tiers · 1 eval batch · last updated 2026-05-04</p>
+
+<div class="info-banner">
+  <strong>Standalone snapshot.</strong> This is the offline version of the registry interface. Action buttons describe what they would do in a connected environment; they do not currently send anything.
+</div>
+
+<div class="stats">
+  <div class="stat">
+    <div class="stat-label">Total prompts</div>
+    <div class="stat-val">7</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">In production</div>
+    <div class="stat-val">3</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Eval coverage</div>
+    <div class="stat-val">57%</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Avg cost/run</div>
+    <div class="stat-val">$0.05</div>
+  </div>
+</div>
+
+<div class="controls">
+  <button class="filter-btn active" data-filter="all">All</button>
+  <button class="filter-btn" data-filter="audit">Audit</button>
+  <button class="filter-btn" data-filter="advisory">Advisory</button>
+  <button class="filter-btn" data-filter="reference">Reference</button>
+  <span class="spacer"></span>
+  <select id="sort">
+    <option value="name">Sort: name</option>
+    <option value="cost">Sort: cost</option>
+    <option value="tokens">Sort: tokens</option>
+    <option value="status">Sort: status</option>
+  </select>
+</div>
+
+<div id="rows"></div>
+
+<div class="footer">
+  Built 2026-05-04 in conversation. No backing store. Action buttons are informational only in this standalone snapshot. To make this live, connect to the JSON in INDEX.json or a database.
+</div>
+
+</div>
+
+<script>
+const data = [
+  { id: "consensus_protocol", version: "1.1.0", status: "draft", tier: "audit", cost: 0.04, costStr: "~$0.04", tokens: 2650, defaultModel: "gemini-2.5-pro", evalStatus: "pending", useCase: "Canonical multi-model decision committee", composes: [], note: "Awaiting regression test on arithmetic-validation gap" },
+  { id: "consensus_protocol", version: "1.0.0", status: "deprecated", tier: "audit", cost: 0.04, costStr: "~$0.04", tokens: 2400, defaultModel: "gemini-2.5-pro", evalStatus: "batch#1 ✓", useCase: "Prior version; missed input-validation step", composes: [], note: "4-model batch: 2/4 caught arithmetic inconsistency. Reason for v1.1.0." },
+  { id: "committee_review", version: "1.1", status: "production", tier: "audit", cost: 0.09, costStr: "~$0.09", tokens: 2950, defaultModel: "gpt-5.5", evalStatus: "passed", useCase: "Premium 6-lane strategic audit", composes: [], note: "Higher citation-source-tier than consensus_protocol" },
+  { id: "premium_enterprise_review", version: "1.0", status: "active", tier: "audit", cost: 0.18, costStr: "~$0.18", tokens: 4200, defaultModel: "claude-opus-4.7", evalStatus: "passed", useCase: "Enterprise / high-stakes (Opus)", composes: [], note: "Most thorough development per lane; verbose" },
+  { id: "lite_fast_review", version: "1.0", status: "active", tier: "audit", cost: 0.008, costStr: "~$0.008", tokens: 1450, defaultModel: "gemini-2.5-flash", evalStatus: "unevaluated", useCase: "High-volume / fast", composes: [], note: "Quality-cliff probe pending" },
+  { id: "standard_advice", version: "1.0", status: "production", tier: "advisory", cost: 0.002, costStr: "~$0.002", tokens: 420, defaultModel: "claude-haiku-4.5", evalStatus: "passed", useCase: "Fast single-model advice", composes: [], note: "Stable; high invocation count expected" },
+  { id: "industry_playbook_technology", version: "1.0", status: "active", tier: "reference", cost: null, costStr: "—", tokens: null, defaultModel: "—", evalStatus: "n/a", useCase: "Tech few-shot examples (composable)", composes: [], note: "Not runnable standalone; called by other prompts" }
+];
+
+let activeFilter = "all";
+let activeSort = "name";
+
+function render() {
+  let rows = data.filter(d => activeFilter === "all" || d.tier === activeFilter);
+  rows.sort((a, b) => {
+    if (activeSort === "cost") return (b.cost || 0) - (a.cost || 0);
+    if (activeSort === "tokens") return (b.tokens || 0) - (a.tokens || 0);
+    if (activeSort === "status") return a.status.localeCompare(b.status);
+    return a.id.localeCompare(b.id) || a.version.localeCompare(b.version);
+  });
+
+  document.getElementById("rows").innerHTML = rows.map(d => `
+    <div class="row" data-id="${d.id}-${d.version}">
+      <div class="row-main">
+        <div class="row-id-block">
+          <div class="row-id">
+            <span class="id">${d.id}</span>
+            <span class="ver">@${d.version}</span>
+          </div>
+          <div class="row-use">${d.useCase}</div>
+        </div>
+        <div class="badges">
+          <span class="badge b-tier-${d.tier}">${d.tier}</span>
+          <span class="badge b-${d.status}">${d.status}</span>
+        </div>
+        <div class="row-cost">
+          <div class="row-cost-amt">${d.costStr}</div>
+          <div class="row-cost-tok">${d.tokens ? d.tokens.toLocaleString() + " tok" : "—"}</div>
+        </div>
+      </div>
+      <div class="detail">
+        <dl class="kv">
+          <dt>Default model</dt><dd class="mono">${d.defaultModel}</dd>
+          <dt>Eval status</dt><dd>${d.evalStatus}</dd>
+          <dt>Notes</dt><dd>${d.note}</dd>
+          <dt>Composes</dt><dd>${d.composes.length ? d.composes.join(", ") : "none"}</dd>
+        </dl>
+        <div class="actions">
+          <button onclick="event.stopPropagation(); alert('Would view body of ${d.id}@${d.version}')">View body</button>
+          <button onclick="event.stopPropagation(); alert('Would run ${d.id}@${d.version} on a new directive')">Run</button>
+          <button onclick="event.stopPropagation(); alert('Would show eval history for ${d.id}@${d.version}')">Eval history</button>
+        </div>
+      </div>
+    </div>
+  `).join("");
+
+  document.querySelectorAll(".row").forEach(r => {
+    r.addEventListener("click", () => r.classList.toggle("expanded"));
+  });
+}
+
+document.querySelectorAll(".filter-btn").forEach(b => {
+  b.addEventListener("click", () => {
+    document.querySelectorAll(".filter-btn").forEach(x => x.classList.remove("active"));
+    b.classList.add("active");
+    activeFilter = b.dataset.filter;
+    render();
+  });
+});
+document.getElementById("sort").addEventListener("change", e => {
+  activeSort = e.target.value;
+  render();
+});
+
+render();
+</script>
+</body>
+</html>

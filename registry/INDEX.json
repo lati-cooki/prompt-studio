@@ -1,0 +1,156 @@
+{
+  "registry_version": "0.1",
+  "generated_at": "2026-05-04",
+  "owner": "troy_builds",
+  "owner_entity": "Lati Cooki LLC",
+
+  "prompts": [
+    {
+      "id": "consensus_protocol",
+      "version": "1.1.0",
+      "status": "draft",
+      "tier": "audit",
+      "cost_per_run_usd": 0.04,
+      "tokens_prompt_body": 2650,
+      "default_model": "gemini-2.5-pro",
+      "tested_on": ["pending"],
+      "eval_status": "pending",
+      "use_case": "Canonical multi-model decision committee",
+      "composes": [],
+      "file": "prompts/consensus_protocol_v1_1_0.md",
+      "notes": "Awaiting regression test on arithmetic-validation gap closed in this version"
+    },
+    {
+      "id": "consensus_protocol",
+      "version": "1.0.0",
+      "status": "deprecated",
+      "tier": "audit",
+      "cost_per_run_usd": 0.04,
+      "tokens_prompt_body": 2400,
+      "default_model": "gemini-2.5-pro",
+      "tested_on": ["claude-opus-4.7", "grok-4.3", "gpt-5.5", "gemini-2.5-pro"],
+      "eval_status": "validated",
+      "eval_batch": "eval_batch_001",
+      "use_case": "Prior version; missed input-validation step",
+      "composes": [],
+      "file": "prompts/consensus_protocol_v1_0_0.md",
+      "notes": "Eval batch revealed the BRIEF section did not require internal-arithmetic-consistency check on supplied facts. 2 of 4 frontier models missed an inconsistency in the test directive as a result."
+    },
+    {
+      "id": "committee_review",
+      "version": "1.1",
+      "status": "production",
+      "tier": "audit",
+      "cost_per_run_usd": 0.09,
+      "tokens_prompt_body": 2950,
+      "default_model": "gpt-5.5",
+      "tested_on": ["gpt-5.5"],
+      "eval_status": "passed",
+      "use_case": "Premium 6-lane strategic audit",
+      "composes": [],
+      "file": null,
+      "notes": "Higher citation-source-tier than consensus_protocol; not included in this archive (referenced from session table only)"
+    },
+    {
+      "id": "premium_enterprise_review",
+      "version": "1.0",
+      "status": "active",
+      "tier": "audit",
+      "cost_per_run_usd": 0.18,
+      "tokens_prompt_body": 4200,
+      "default_model": "claude-opus-4.7",
+      "tested_on": ["claude-opus-4.7"],
+      "eval_status": "passed",
+      "use_case": "Enterprise / high-stakes (Opus)",
+      "composes": [],
+      "file": null,
+      "notes": "Most thorough development per lane; verbose. Not included in this archive (referenced from session table only)"
+    },
+    {
+      "id": "lite_fast_review",
+      "version": "1.0",
+      "status": "active",
+      "tier": "audit",
+      "cost_per_run_usd": 0.008,
+      "tokens_prompt_body": 1450,
+      "default_model": "gemini-2.5-flash",
+      "tested_on": [],
+      "eval_status": "unevaluated",
+      "use_case": "High-volume / fast",
+      "composes": [],
+      "file": null,
+      "notes": "Quality-cliff probe pending; not included in this archive (referenced from session table only)"
+    },
+    {
+      "id": "standard_advice",
+      "version": "1.0",
+      "status": "production",
+      "tier": "advisory",
+      "cost_per_run_usd": 0.002,
+      "tokens_prompt_body": 420,
+      "default_model": "claude-haiku-4.5",
+      "tested_on": ["claude-haiku-4.5"],
+      "eval_status": "passed",
+      "use_case": "Fast single-model advice",
+      "composes": [],
+      "file": null,
+      "notes": "Stable; high invocation count expected. Not included in this archive (referenced from session table only)"
+    },
+    {
+      "id": "industry_playbook_technology",
+      "version": "1.0",
+      "status": "active",
+      "tier": "reference",
+      "cost_per_run_usd": null,
+      "tokens_prompt_body": null,
+      "default_model": null,
+      "tested_on": [],
+      "eval_status": "n/a",
+      "use_case": "Tech few-shot examples (composable)",
+      "composes": [],
+      "file": null,
+      "notes": "Reference-tier; not runnable standalone. Future composition target."
+    }
+  ],
+
+  "evals": [
+    {
+      "id": "eval_batch_001",
+      "directive": "strategiai_pre_mvp_margin",
+      "date": "2026-05-04",
+      "prompt_under_test": "consensus_protocol@1.0.0",
+      "models_tested": [
+        "claude-opus-4.7",
+        "grok-4.3",
+        "gpt-5.5",
+        "gemini-2.5-pro"
+      ],
+      "headline_finding": "2 of 4 frontier models missed an arithmetic inconsistency in the supplied directive; v1.0.0 prompt did not require internal-consistency validation",
+      "file": "evals/eval_batch_001.md",
+      "data_file": "evals/eval_batch_001_data.json"
+    }
+  ],
+
+  "open_questions": [
+    {
+      "id": "regression_test_v1_1_0",
+      "description": "Run v1.1.0 on the StrategiAI directive across all four frontier models; verify all four catch the arithmetic inconsistency",
+      "blocker": "v1.1.0 is currently in draft status; needs to be exercised"
+    },
+    {
+      "id": "quality_cliff_probe",
+      "description": "Run consensus_protocol on at least one mid-tier model (Sonnet 4.6, GPT-5.4 mini, or Gemini 2.5 Flash)",
+      "blocker": "No runs at sub-frontier tier exist yet"
+    },
+    {
+      "id": "first_composition",
+      "description": "Build citation_verifier as a sub-prompt; have consensus_protocol call it during the EVIDENCE DISCIPLINE phase",
+      "blocker": "Composition pattern not yet exercised in the registry"
+    },
+    {
+      "id": "persistence_layer",
+      "description": "Move registry state out of widget hardcode into a backing store",
+      "blocker": "No store selected; candidates: JSON file in repo, Notion DB, Postgres, persistent storage in artifact"
+    }
+  ]
+}

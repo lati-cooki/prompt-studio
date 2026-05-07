@@ -1,0 +1,154 @@
+{
+  "id": "eval_batch_001",
+  "directive_id": "strategiai_pre_mvp_margin",
+  "date": "2026-05-04",
+  "prompt_under_test": {
+    "id": "consensus_protocol",
+    "version": "1.0.0"
+  },
+
+  "models_tested": [
+    {
+      "model": "claude-opus-4.7",
+      "verdict": "CONTESTED",
+      "tokens": {
+        "input": 3500,
+        "output": 5500,
+        "total": 9000
+      },
+      "cost_usd_estimated": 0.11,
+      "metrics": {
+        "caught_arithmetic_inconsistency": false,
+        "citation_count": 30,
+        "citation_source_quality": "high",
+        "lane_independence": "strong",
+        "cross_examination_substance": "refinement-heavy",
+        "proposed_path_d": "partial",
+        "caught_moat_commoditization": "partial",
+        "made_prefix_vs_response_distinction": false,
+        "information_density_findings_per_1k_tokens": 2.5,
+        "produced_meta_observation": true
+      },
+      "estimated_grade": "A-",
+      "notes": "Most rhetorical development per lane; strongest dissent preservation. Missed the foundational arithmetic issue. Self-assessed as strongest before comparison; comparison revealed overconfidence."
+    },
+    {
+      "model": "grok-4.3",
+      "verdict": "REVISIT",
+      "tokens": {
+        "input": 2900,
+        "output": 3000,
+        "total": 5900
+      },
+      "cost_usd_estimated": 0.005,
+      "metrics": {
+        "caught_arithmetic_inconsistency": false,
+        "citation_count": 15,
+        "citation_source_quality": "mixed",
+        "lane_independence": "moderate",
+        "cross_examination_substance": "compressed",
+        "proposed_path_d": "yes (modified A)",
+        "caught_moat_commoditization": false,
+        "made_prefix_vs_response_distinction": false,
+        "information_density_findings_per_1k_tokens": 2.3,
+        "produced_meta_observation": false
+      },
+      "estimated_grade": "B+",
+      "notes": "Lowest token cost. Cited xAI provider docs directly. One citation requires verification (getmaxim.ai claim). Missed arithmetic and meta-observation."
+    },
+    {
+      "model": "gpt-5.5",
+      "verdict": "REVISIT",
+      "tokens": {
+        "input": 2900,
+        "output": 6000,
+        "total": 8900
+      },
+      "cost_usd_estimated": 0.09,
+      "metrics": {
+        "caught_arithmetic_inconsistency": true,
+        "citation_count": 25,
+        "citation_source_quality": "high",
+        "lane_independence": "strong",
+        "cross_examination_substance": "refinement-heavy",
+        "proposed_path_d": "yes",
+        "caught_moat_commoditization": "partial",
+        "made_prefix_vs_response_distinction": true,
+        "information_density_findings_per_1k_tokens": 3.0,
+        "produced_meta_observation": true
+      },
+      "estimated_grade": "A",
+      "notes": "Caught arithmetic in BRIEF. Unique technical distinction between prompt-prefix caching and semantic-response caching. Highest citation source quality. Explicit fourth path."
+    },
+    {
+      "model": "gemini-2.5-pro",
+      "verdict": "REVISIT",
+      "tokens": {
+        "input": 5350,
+        "output": 1500,
+        "total": 6850
+      },
+      "cost_usd_estimated": 0.04,
+      "metrics": {
+        "caught_arithmetic_inconsistency": true,
+        "citation_count": 15,
+        "citation_source_quality": "mixed",
+        "lane_independence": "strong",
+        "cross_examination_substance": "citation+refinement-heavy",
+        "proposed_path_d": "yes (named: Reverse Trial)",
+        "caught_moat_commoditization": "yes (strongest)",
+        "made_prefix_vs_response_distinction": false,
+        "information_density_findings_per_1k_tokens": 8.0,
+        "produced_meta_observation": true
+      },
+      "estimated_grade": "A",
+      "notes": "Caught arithmetic AND proposed reconciliation hypothesis. Named moat-commoditization clearly. Operationally specific Path D. Highest information density. Some citations from non-institutional sources."
+    }
+  ],
+
+  "headline_findings": [
+    {
+      "finding": "Foundational defect in v1.0.0 BRIEF section",
+      "evidence": "2 of 4 frontier models missed arithmetic inconsistency that v1.0.0 prompt did not require validating",
+      "severity": "high",
+      "remediation": "v1.1.0 adds Step 0 input validation"
+    },
+    {
+      "finding": "Verdict_action variance is correct behavior on contested directives",
+      "evidence": "3 of 4 runs converged on REVISIT; Claude landed at CONTESTED. Both readings are defensible.",
+      "severity": "informational",
+      "remediation": "none — feature, not bug"
+    },
+    {
+      "finding": "Output token count does not correlate with audit quality",
+      "evidence": "Gemini ~1,500 tokens caught more issues than Claude ~5,500 tokens",
+      "severity": "informational",
+      "remediation": "Eval framework should weight information density, not length"
+    },
+    {
+      "finding": "Citation source quality varies meaningfully across models",
+      "evidence": "GPT/Claude leaned institutional; Grok/Gemini leaned mixed",
+      "severity": "informational",
+      "remediation": "Eval framework should record citation source tier as separate signal"
+    },
+    {
+      "finding": "Cost spread is ~22x across validated frontier models",
+      "evidence": "Grok 4.3 ~$0.005 to Claude Opus 4.7 ~$0.11",
+      "severity": "informational",
+      "remediation": "Recommendation hierarchy should surface this trade-off explicitly"
+    }
+  ],
+
+  "recommendation_hierarchy": {
+    "default": "gemini-2.5-pro",
+    "high_quality_alternative": "gpt-5.5",
+    "verbose_alternative": "claude-opus-4.7",
+    "budget_alternative": "grok-4.3"
+  },
+
+  "open_questions_post_eval": [
+    "Quality cliff: do mid-tier models (Sonnet 4.6, GPT-5.4 mini, Gemini 2.5 Flash) execute consensus_protocol acceptably?",
+    "Cross-directive stability: how does the prompt perform on directive types beyond financial/strategic decisions?",
+    "v1.1.0 regression test: does the new version achieve 100% catch rate on the arithmetic check?"
+  ]
+}

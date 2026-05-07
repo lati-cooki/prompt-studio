@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Prompt Sandbox</title>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  /* ── Design tokens ─────────────────────────────────── */
+  :root {
+    /* surfaces */
+    --bg:         #f6f3ee;
+    --rail:       #eee8dd;
+    --panel-alt:  #faf7f1;
+    --panel:      #efeae1;
+
+    /* ink */
+    --ink:        #1f2529;
+    --ink-dim:    #4a5056;
+    --muted:      #6b7278;
+    --faint:      #a8ada8;
+
+    /* rules */
+    --hair:       #d9d4c8;
+    --hair-soft:  #e4dfd3;
+
+    /* accents */
+    --accent:       #3f7a7a;
+    --accent-b:     #8a6a9c;
+    --accent-ok:    #6a9c6a;
+    --accent-warn:  #c89a3a;
+    --accent-err:   #b85450;
+  }
+
+  /* ── Reset ─────────────────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%;
+    background: var(--bg); color: var(--ink);
+    font-family: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    font-size: 13px; line-height: 1.55; letter-spacing: -0.003em;
+  }
+  body { display: flex; flex-direction: row; overflow: hidden; }
+
+  /* ── Mono utility ───────────────────────────────────── */
+  .mono {
+    font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  /* ── Layout ─────────────────────────────────────────── */
+  .main-wrap {
+    flex: 1; display: flex; flex-direction: column;
+    min-width: 0; min-height: 0;
+  }
+
+  /* ── Rail (left sessions sidebar) ───────────────────── */
+  .rail {
+    width: 232px; flex-shrink: 0;
+    background: var(--rail);
+    border-right: 1px solid var(--hair);
+    display: flex; flex-direction: column;
+    padding: 16px 0;
+    overflow: hidden;
+  }
+  .rail-header {
+    display: flex; align-items: center; gap: 10px;
+    padding: 0 18px 16px;
+  }
+  .rail-logo {
+    width: 22px; height: 22px; border-radius: 4px;
+    background: var(--ink); color: var(--bg);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700; flex-shrink: 0;
+  }
+  .rail-title { font-size: 13px; font-weight: 600; letter-spacing: -0.01em; }
+  .rail-header-spacer { flex: 1; }
+  .rail-mode-tag {
+    font-family: "Geist Mono", monospace;
+    font-size: 10px; color: var(--faint);
+  }
+  .rail-new-wrap { padding: 0 12px 12px; }
+  .rail-new-btn {
+    width: 100%; background: var(--bg); color: var(--ink);
+    border: 1px solid var(--hair); padding: 8px 10px;
+    border-radius: 3px; display: flex; align-items: center; gap: 8px;
+    font-family: inherit; font-size: 12.5px; cursor: pointer;
+  }
+  .rail-new-btn:hover { background: var(--panel-alt); }
+  .rail-new-plus { color: var(--accent); font-size: 14px; line-height: 1; }
+  .rail-new-spacer { flex: 1; }
+  .rail-new-kbd {
+    font-family: "Geist Mono", monospace;
+    font-size: 10px; color: var(--faint);
+  }
+  .rail-saved-label {
+    padding: 12px 18px 6px;
+    font-family: "Geist Mono", monospace;
+    font-size: 10px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--faint);
+  }
+  .rail-list { flex: 1; overflow-y: auto; }
+  .rail-session-row {
+    padding: 7px 18px; display: flex; align-items: center; gap: 10px;
+    font-size: 12.5px; color: var(--ink-dim); cursor: pointer;
+    border-left: 2px solid transparent;
+    position: relative;
+  }
+  .rail-session-row:hover { background: var(--panel-alt); }
+  .rail-session-row.active {
+    background: var(--bg); color: var(--ink);
+    border-left: 2px solid var(--accent);
+    margin-left: -1px;
+  }
+  .rail-session-dots {
+    font-family: "Geist Mono", monospace;
+    font-size: 10px; color: var(--faint);
+    width: 16px; letter-spacing: 1px; flex-shrink: 0;
+  }
+  .rail-session-name {
+    flex: 1; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+  }
+  .rail-session-age {
+    font-family: "Geist Mono", monospace;
+    font-size: 10px; color: var(--faint); flex-shrink: 0;
+  }
+  .rail-session-del {
+    display: none; position: absolute; right: 10px;
+    background: transparent; border: none;
+    color: var(--muted); font-size: 11px; cursor: pointer;
+    padding: 2px 4px; line-height: 1;
+  }
+  .rail-session-row:hover .rail-session-del { display: block; }
+  .rail-session-row:hover .rail-session-age { display: none; }
+  .rail-empty {
+    padding: 14px 18px; color: var(--muted);
+    font-size: 12px; font-style: italic;
+  }
+  .rail-save-slot { padding: 0 12px 8px; }
+  .rail-save-btn {
+    width: 100%; background: transparent; color: var(--muted);
+    border: 1px solid var(--hair); padding: 6px 10px;
+    border-radius: 3px; font-family: inherit; font-size: 12px;
+    cursor: pointer; text-align: left;
+  }
+  .rail-save-btn:hover { color: var(--ink); border-color: var(--ink-dim); }
+  .rail-save-form {
+    display: flex; gap: 6px; align-items: center;
+  }
+  .rail-save-form[hidden] { display: none; }
+  .rail-save-input {
+    flex: 1; background: var(--bg); color: var(--ink);
+    border: 1px solid var(--hair); border-radius: 2px;
+    padding: 5px 8px; font-family: inherit; font-size: 12px;
+  }
+  .rail-save-input:focus { outline: none; border-color: var(--accent); }
+  .rail-save-confirm {
+    background: var(--ink); color: var(--bg); border: none;
+    padding: 5px 10px; border-radius: 2px;
+    font-family: "Geist Mono", monospace; font-size: 10px;
+    letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer;
+  }
+  .rail-save-cancel {
+    background: transparent; color: var(--muted);
+    border: 1px solid var(--hair); padding: 5px 8px;
+    border-radius: 2px; font-family: inherit; font-size: 12px; cursor: pointer;
+  }
+  .rail-vault {
+    margin: 10px 12px 4px;
+    padding: 12px; border-radius: 3px;
+    background: var(--bg); border: 1px solid var(--hair);
+    font-family: "Geist Mono", monospace; font-size: 11px;
+  }
+  .rail-vault-row {
+    display: flex; align-items: center; gap: 8px;
+    color: var(--ink); margin-bottom: 6px;
+  }
+  .health-dot {
+    display: inline-block; width: 7px; height: 7px;
+    border-radius: 50%; background: var(--faint); flex-shrink: 0;
+  }
+  .health-dot.ok   { background: var(--accent-ok); }
+  .health-dot.down { background: var(--accent-err); }
+  .rail-vault-port { color: var(--faint); margin-left: auto; }
+  .rail-vault-sub { color: var(--muted); font-size: 10.5px; line-height: 1.5; }
+
+  /* ── Top bar ─────────────────────────────────────────── */
+  .topbar {
+    display: flex; align-items: center; gap: 14px;
+    padding: 14px 22px;
+    border-bottom: 1px solid var(--hair-soft);
+    background: var(--bg); flex-shrink: 0;
+  }
+  .topbar-crumb {
+    display: flex; align-items: baseline; gap: 8px;
+    min-width: 0; flex: 1;
+  }
+  .topbar-session {
+    font-family: "Geist Mono", monospace;
+    font-size: 11px; color: var(--faint);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .topbar-sep { color: var(--faint); flex-shrink: 0; }
+  .topbar-subtitle { font-size: 13px; font-weight: 500; white-space: nowrap; }
+  .topbar-dots {
+    display: inline-flex; gap: 2px; align-items: center; margin-left: 4px;
+  }
+  .topbar-dots span {
+    width: 4px; height: 4px; border-radius: 50%; background: var(--accent);
+  }
+  .topbar-dots span:nth-child(1) { opacity: 0.4; }
+  .topbar-dots span:nth-child(2) { opacity: 0.6; }
+  .topbar-dots span:nth-child(3) { opacity: 0.8; animation: dot-pulse 1.2s ease-in-out infinite; }
+  @keyframes dot-pulse { 0%,100%{opacity:.8} 50%{opacity:.3} }
+  .topbar-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+
+  /* Mode toggle */
+  .seg-toggle {
+    display: inline-flex;
+    border: 1px solid var(--hair); border-radius: 3px;
+    background: var(--panel-alt); overflow: hidden;
+    font-family: "Geist Mono", monospace; font-size: 11px;
+  }
+  .seg-btn {
+    padding: 5px 11px;
+    background: transparent; border: none; cursor: pointer;
+    color: var(--muted); font-family: inherit; font-size: inherit;
+    display: inline-flex; align-items: center; gap: 5px;
+    white-space: nowrap;
+  }
+  .seg-btn.seg-active { background: var(--ink); color: var(--bg); }
+  .seg-dot {
+    width: 4px; height: 4px; border-radius: 50%; background: var(--accent);
+  }
+  .seg-dot-a { width: 4px; height: 4px; border-radius: 50%; background: var(--accent); }
+  .seg-dot-b { width: 4px; height: 4px; border-radius: 50%; background: var(--accent-b); }
+
+  /* Ghost / stop buttons */
+  .ghost-btn {
+    background: transparent; border: 1px solid var(--hair); color: var(--muted);
+    padding: 5px 10px; border-radius: 3px;
+    font-family: "Geist Mono", monospace; font-size: 11px; cursor: pointer;
+    white-space: nowrap;
+  }
+  .ghost-btn:hover { color: var(--ink); }
+  .stop-btn {
+    background: var(--bg); border: 1px solid var(--accent-err);
+    color: var(--accent-err); padding: 5px 10px; border-radius: 3px;
+    font-family: "Geist Mono", monospace; font-size: 11px; cursor: pointer;
+    white-space: nowrap;
+  }
+
+  /* ── Pane container ──────────────────────────────────── */
+  .pane-container {
+    flex: 1; display: flex; min-height: 0; overflow: hidden;
+  }
+  .pane {
+    flex: 1; display: flex; flex-direction: column;
+    min-height: 0; min-width: 0; background: var(--bg);
+  }
+  .pane + .pane { border-left: 1px solid var(--hair-soft); }
+
+  /* ── Pane prompt header (single mode default) ─────────── */
+  .pane-prompt {
+    background: var(--panel-alt);
+    border-bottom: 1px solid var(--hair-soft);
+    flex-shrink: 0;
+  }
+  /* Compare mode: 2px accent stripe at top */
+  .compare .pane[data-pane-id="A"] .pane-prompt {
+    border-top: 2px solid var(--accent);
+  }
+  .compare .pane[data-pane-id="B"] .pane-prompt {
+    border-top: 2px solid var(--accent-b);
+  }
+
+  /* Label row (single mode only) */
+  .pane-label-row {
+    display: flex; align-items: baseline; justify-content: space-between;
+    padding: 16px 22px 8px;
+  }
+  .compare .pane .pane-label-row { display: none; }
+  .pane-prompt-label {
+    font-family: "Geist Mono", monospace;
+    font-size: 10px; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--faint);
+  }
+
+  /* Meta row (model select + meter) — visible in both modes */
+  .pane-meta-row {
+    display: flex; align-items: center; gap: 10px;
+    padding: 0 22px 0;
+  }
+  /* In compare mode, padding adjusts and badge shows */
+  .compare .pane .pane-meta-row { padding: 12px 18px 8px; }
+
+  /* Badge (compare only) */
+  .pane-badge {
+    display: none;
+    font-family: "Geist Mono", monospace;
+    font-size: 11px; font-weight: 600;
+    padding: 2px 8px; border-radius: 2px;
+    color: #fff; letter-spacing: 0.04em;
+    flex-shrink: 0;
+  }
+  .compare .pane .pane-badge { display: inline-flex; }
+  .compare .pane[data-pane-id="A"] .pane-badge { background: var(--accent); }
+  .compare .pane[data-pane-id="B"] .pane-badge { background: var(--accent-b); }
+
+  /* Model select */
+  .pane-model-select {
+    background: transparent; color: var(--muted);
+    border: none; outline: none; cursor: pointer;
+    font-family: "Geist Mono", monospace; font-size: 11px;
+    padding: 0; appearance: none; -webkit-appearance: none;
+  }
+  /* Styled wrapper for the model select in single mode */
+  .pane-model-wrap {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 5px 10px; border: 1px solid var(--hair);
+    border-radius: 3px; background: var(--panel-alt);
+    font-family: "Geist Mono", monospace; font-size: 11px;
+    cursor: pointer; position: relative;
+  }
+  .pane-model-dot {
+    width: 6px; height: 6px; border-radius: 50%; background: var(--accent);
+  }
+  .pane-meta-spacer { flex: 1; }
+
+  /* Meter — injected by meter.js into .pane-meta-row */
+  .meter {
+    display: flex; align-items: center; gap: 8px;
+    font-family: "Geist Mono", monospace;
+    font-size: 10.5px; color: var(--muted);
+  }
+  .meter-numbers { white-space: nowrap; }
+  .meter-used { color: var(--muted); }
+  .meter-bar {
+    width: 140px; height: 3px;
+    background: var(--hair); border-radius: 2px; overflow: hidden;
+    flex-shrink: 0;
+  }
+  .compare .pane .meter-bar { width: 90px; }
+  .meter-fill {
+    height: 100%; background: var(--accent);
+    transition: width 0.1s linear, background 0.2s;
+    width: 0%;
+  }
+  .meter.amber .meter-fill { background: var(--accent-warn); }
+  .meter.red   .meter-fill { background: var(--accent-err); }
+  /* In compare mode, meter fill color is pane-specific */
+  .compare .pane[data-pane-id="B"] .meter-fill { background: var(--accent-b); }
+  .compare .pane[data-pane-id="B"] .meter.amber .meter-fill { background: var(--accent-warn); }
+  .compare .pane[data-pane-id="B"] .meter.red   .meter-fill { background: var(--accent-err); }
+
+  /* Prompt body (read-only preview, shown when not editing/collapsed) */
+  .pane-prompt-body {
+    margin: 8px 22px 0;
+    padding: 10px 12px;
+    background: var(--bg);
+    border: 1px solid var(--hair);
+    border-left: 2px solid var(--accent);
+    border-radius: 2px;
+    font-family: "Geist Mono", monospace;
+    font-size: 12.5px; line-height: 1.65; color: var(--ink);
+    cursor: pointer; user-select: none;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .compare .pane[data-pane-id="B"] .pane-prompt-body {
+    border-left: 2px solid var(--accent-b);
+  }
+  .pane-prompt-gt { color: var(--muted); }
+
+  /* Collapsed: hide body and hint, just show meta rows */
+  .pane-prompt.collapsed .pane-prompt-body { display: none; }
+  .pane-prompt.collapsed .pane-prompt-hint { display: none; }
+  .pane-prompt.collapsed .pane-label-row { padding-bottom: 10px; }
+
+  /* Editing: swap body for textarea */
+  .pane-prompt.editing .pane-prompt-body { display: none; }
+  .pane-prompt-expanded {
+    display: none;
+    flex-direction: column; gap: 8px;
+    padding: 8px 22px 0;
+  }
+  .pane-prompt.editing .pane-prompt-expanded { display: flex; }
+  .pane-prompt-textarea {
+    min-height: 90px;
+    background: var(--bg); color: var(--ink);
+    border: 1px solid var(--hair);
+    border-left: 2px solid var(--accent);
+    border-radius: 2px;
+    padding: 10px 12px;
+    font-family: "Geist Mono", monospace;
+    font-size: 12.5px; line-height: 1.65;
+    resize: vertical; outline: none;
+  }
+  .compare .pane[data-pane-id="B"] .pane-prompt-textarea {
+    border-left: 2px solid var(--accent-b);
+  }
+  .pane-prompt-textarea:focus { border-color: var(--accent); }
+  .compare .pane[data-pane-id="B"] .pane-prompt-textarea:focus {
+    border-color: var(--accent-b);
+  }
+  .pane-apply-reset {
+    align-self: flex-end;
+    background: var(--ink); color: var(--bg); border: none;
+    padding: 6px 14px; border-radius: 2px;
+    font-family: "Geist Mono", monospace; font-size: 10px;
+    letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer;
+  }
+
+  /* Prompt hint */
+  .pane-prompt-hint {
+    margin: 8px 22px 14px;
+    font-family: "Geist Mono", monospace;
+    font-size: 11px; color: var(--faint);
+  }
+  /* In compare mode with collapsed (default), show a smaller version */
+  .compare .pane .pane-prompt-hint { margin: 0 18px 10px; }
+
+  /* ── Compare mode: compact header for pane-meta-row ─────── */
+  /* In compare mode, reduce vertical spacing for compact look */
+  .compare .pane .pane-prompt-body {
+    margin: 0 18px 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-size: 11.5px;
+  }
+  .compare .pane .pane-prompt-hint { display: none; }
+  .compare .pane .pane-meta-row { margin-bottom: 8px; }
+
+  /* ── Log ─────────────────────────────────────────────── */
+  .pane-log {
+    flex: 1; overflow-y: auto;
+    padding: 18px 22px 24px;
+    display: flex; flex-direction: column; gap: 14px;
+    position: relative;
+  }
+  /* Baseline rule grid */
+  .pane-log::before {
+    content: '';
+    position: absolute; inset: 0;
+    pointer-events: none; opacity: 0.3;
+    background-image: repeating-linear-gradient(
+      to bottom,
+      transparent 0, transparent 27px,
+      var(--hair-soft) 27px, var(--hair-soft) 28px
+    );
+  }
+  .compare .pane .pane-log { padding: 18px 20px 24px; }
+
+  /* ── Bubbles ─────────────────────────────────────────── */
+  .bubble-wrap {
+    display: flex; flex-direction: column;
+    max-width: 86%; position: relative; z-index: 1;
+  }
+  .bubble-wrap.user { align-self: flex-end; align-items: flex-end; }
+  .bubble-wrap.assistant { align-self: flex-start; align-items: flex-start; }
+  .bubble-role {
+    font-family: "Geist Mono", monospace;
+    font-size: 10px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--faint);
+    margin-bottom: 4px;
+  }
+  .bubble-wrap.user .bubble-role { padding-right: 2px; }
+  .bubble-wrap.assistant .bubble-role { padding-left: 2px; }
+  .bubble {
+    font-size: 13.5px; line-height: 1.6; color: var(--ink);
+    padding: 10px 14px; border-radius: 3px;
+    max-width: 100%; white-space: pre-wrap; word-wrap: break-word;
+  }
+  .bubble.user {
+    background: var(--bg);
+    border: 1px solid var(--hair);
+  }
+  .bubble.assistant {
+    background: var(--panel-alt);
+    border: 1px solid var(--hair-soft);
+    border-left: 2px solid var(--accent);
+  }
+  /* Pane B assistant bubbles use plum */
+  .compare .pane[data-pane-id="B"] .bubble.assistant {
+    border-left: 2px solid var(--accent-b);
+  }
+  .bubble.error { color: var(--accent-err); border-color: var(--accent-err); }
+  .bubble.pending {
+    color: var(--muted);
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+  /* Streaming caret on last pending bubble */
+  .bubble.assistant.pending::after {
+    content: '';
+    display: inline-block;
+    width: 6px; height: 14px;
+    background: var(--accent);
+    vertical-align: text-bottom;
+    margin-left: 3px; opacity: 0.8;
+  }
+  .compare .pane[data-pane-id="B"] .bubble.assistant.pending::after {
+    background: var(--accent-b);
+  }
+  @keyframes pulse { 0%,100%{opacity:.9} 50%{opacity:.4} }
+
+  /* Reasoning tokens */
+  .bubble.assistant .reasoning {
+    display: block;
+    color: var(--muted); font-style: italic;
+    font-size: 12.5px; line-height: 1.5;
+  }
+  .bubble.assistant .reasoning:not(:empty) { margin-bottom: 6px; }
+  .bubble.assistant .content { display: block; }
+
+  /* Sources chips */
+  .bubble.assistant .sources {
+    display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+    margin-top: 8px;
+    font-family: "Geist Mono", monospace; font-size: 10.5px; color: var(--muted);
+  }
+  .bubble.assistant .sources .source-label { color: var(--faint); }
+  .bubble.assistant .sources span:not(.source-label) {
+    padding: 1px 6px;
+    border: 1px solid var(--hair);
+    border-radius: 2px;
+    background: var(--panel-alt);
+    color: var(--ink-dim);
+    text-decoration: underline dotted;
+    cursor: help;
+  }
+
+  /* Log notes */
+  .log-note {
+    align-self: center;
+    color: var(--muted); font-size: 12px; font-style: italic;
+    padding: 2px 8px; position: relative; z-index: 1;
+  }
+
+  /* ── Empty state ─────────────────────────────────────── */
+  .empty-state {
+    display: flex; align-items: center; justify-content: center;
+    flex: 1; padding: 64px 22px;
+  }
+  .empty-state-inner {
+    max-width: 440px; text-align: center;
+    position: relative; z-index: 1;
+  }
+  .empty-tag {
+    font-family: "Geist Mono", monospace;
+    font-size: 10px; letter-spacing: 0.18em;
+    text-transform: uppercase; color: var(--faint);
+    margin-bottom: 24px;
+  }
+  .empty-hero {
+    font-size: 26px; font-weight: 500;
+    letter-spacing: -0.015em; line-height: 1.2;
+    margin-bottom: 14px;
+  }
+  .empty-body {
+    font-size: 13px; color: var(--muted);
+    margin-bottom: 28px; line-height: 1.55;
+  }
+  .empty-body em {
+    color: var(--ink); font-style: normal;
+    border-bottom: 1px dotted var(--muted);
+  }
+  .empty-shortcuts {
+    display: inline-flex; gap: 6px;
+    font-family: "Geist Mono", monospace; font-size: 11px; color: var(--muted);
+  }
+  .kbd-chip {
+    padding: 3px 8px;
+    border: 1px solid var(--hair);
+    border-radius: 2px;
+  }
+
+  /* ── Composer ────────────────────────────────────────── */
+  .composer {
+    border-top: 1px solid var(--hair-soft);
+    background: var(--panel-alt);
+    padding: 14px 22px 18px;
+    flex-shrink: 0;
+  }
+  .composer-field {
+    display: flex; align-items: stretch; gap: 12px;
+    background: var(--bg);
+    border: 1px solid var(--hair);
+    border-radius: 3px; padding: 12px 14px;
+  }
+  .composer-label {
+    font-family: "Geist Mono", monospace;
+    font-size: 11px; color: var(--faint);
+    padding-top: 3px; min-width: 44px; flex-shrink: 0;
+    white-space: nowrap;
+  }
+  .composer-field textarea {
+    flex: 1; min-height: 54px; max-height: 200px;
+    background: transparent; color: var(--ink);
+    border: none; outline: none;
+    font-family: inherit; font-size: 13.5px; line-height: 1.55;
+    resize: vertical;
+  }
+  .composer-field textarea::placeholder { color: var(--faint); }
+  .composer-send-col {
+    display: flex; flex-direction: column;
+    align-items: flex-end; gap: 6px; flex-shrink: 0;
+  }
+  #send {
+    background: var(--ink); color: var(--bg); border: none;
+    padding: 6px 16px; border-radius: 2px;
+    font-family: "Geist Mono", monospace; font-size: 11px;
+    letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer;
+  }
+  #send:disabled {
+    background: var(--faint); cursor: not-allowed;
+  }
+  .composer-hint {
+    font-family: "Geist Mono", monospace;
+    font-size: 10px; color: var(--faint);
+    white-space: nowrap;
+  }
+  .composer-controls {
+    margin-top: 8px; display: flex; align-items: center; gap: 14px;
+    font-family: "Geist Mono", monospace; font-size: 11px; color: var(--muted);
+  }
+  .vault-label {
+    display: flex; align-items: center; gap: 6px; cursor: pointer;
+  }
+  .vault-checkbox-box {
+    width: 14px; height: 14px;
+    border: 1px solid var(--ink); background: transparent;
+    display: inline-flex; align-items: center; justify-content: center;
+    color: transparent; font-size: 10px; border-radius: 2px;
+    flex-shrink: 0;
+  }
+  .vault-checkbox-box.checked {
+    background: var(--ink); color: var(--bg);
+  }
+  .top-k-input {
+    width: 40px; background: var(--bg); color: var(--ink);
+    border: 1px solid var(--hair); border-radius: 2px;
+    padding: 1px 4px; font-family: inherit; font-size: inherit;
+    outline: none; text-align: center;
+  }
+  .composer-spacer { flex: 1; }
+  .vault-inline-status {
+    color: var(--faint); font-size: 10.5px;
+    max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+
+<!-- ── Left sessions rail ───────────────────────────── -->
+<aside class="rail" id="sessions-rail">
+  <div class="rail-header">
+    <div class="rail-logo">◐</div>
+    <span class="rail-title">Sandbox</span>
+    <span class="rail-header-spacer"></span>
+    <span class="rail-mode-tag" id="rail-mode-tag">v2</span>
+  </div>
+
+  <div class="rail-new-wrap">
+    <button class="rail-new-btn" id="new-session">
+      <span class="rail-new-plus">＋</span>
+      New session
+      <span class="rail-new-spacer"></span>
+      <span class="rail-new-kbd">⌘N</span>
+    </button>
+  </div>
+
+  <div class="rail-saved-label">Saved</div>
+  <div class="rail-list" id="sessions-list"></div>
+
+  <div class="rail-save-slot" id="sessions-save-slot"></div>
+
+  <div class="rail-vault" id="vault-card">
+    <div class="rail-vault-row">
+      <span class="health-dot" id="vault-health" title="Vault search: checking…"></span>
+      <span>vault-search</span>
+      <span class="rail-vault-port">:8100</span>
+    </div>
+    <div class="rail-vault-sub" id="vault-card-sub">checking…</div>
+  </div>
+</aside>
+
+<!-- ── Main area ─────────────────────────────────────── -->
+<div class="main-wrap">
+
+  <header class="topbar">
+    <div class="topbar-crumb">
+      <span class="topbar-session" id="topbar-session">untitled</span>
+      <span class="topbar-sep">/</span>
+      <span class="topbar-subtitle" id="topbar-subtitle">empty conversation</span>
+      <span class="topbar-dots" id="topbar-dots" hidden>
+        <span></span><span></span><span></span>
+      </span>
+    </div>
+    <div class="topbar-actions">
+      <div class="seg-toggle" id="mode-toggle">
+        <button class="seg-btn seg-active" id="seg-single">
+          <span class="seg-dot"></span>Single
+        </button>
+        <button class="seg-btn" id="seg-compare">
+          <span class="seg-dot-a"></span><span class="seg-dot-b"></span>Compare A / B
+        </button>
+      </div>
+      <button class="ghost-btn" id="export-btn">Export .md</button>
+      <button class="stop-btn" id="stop-both" hidden>⏹ Stop both</button>
+    </div>
+  </header>
+
+  <main class="pane-container" id="pane-container"></main>
+
+  <footer class="composer">
+    <div class="composer-field">
+      <span class="composer-label" id="composer-label">you</span>
+      <textarea id="input" placeholder="Message…" rows="2"></textarea>
+      <div class="composer-send-col">
+        <button id="send">SEND ↵</button>
+        <span class="composer-hint" id="send-hint">shift+↵ newline</span>
+      </div>
+    </div>
+    <div class="composer-controls">
+      <label class="vault-label" id="vault-label-wrap">
+        <span class="vault-checkbox-box" id="vault-checkbox-visual"></span>
+        <input type="checkbox" id="use-vault"
+               style="position:absolute;opacity:0;pointer-events:none;width:0;height:0">
+        use vault
+      </label>
+      <span>top-K <input type="number" id="top-k" min="1" max="20" value="5"
+                         class="top-k-input"></span>
+      <button class="ghost-btn" id="reindex">Reindex</button>
+      <span class="composer-spacer"></span>
+      <span class="vault-inline-status" id="vault-status"></span>
+    </div>
+  </footer>
+
+</div>
+
+<script type="module" src="./js/app.js"></script>
+</body>
+</html>

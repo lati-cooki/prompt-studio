@@ -330,18 +330,18 @@ function loadEntry(entry) {
   syncVaultCheckbox();
 }
 
-function refreshSessionList() {
-  renderSessionList($sessionsList, sessionsStore.load(), {
+async function refreshSessionList() {
+  renderSessionList($sessionsList, await sessionsStore.load(), {
     activeId: activeSessionId,
-    onClick:  (entry) => {
+    onClick: async (entry) => {
       activeSessionId = entry.id;
       loadEntry(entry);
       refreshSessionList();
     },
-    onDelete: (entry) => {
+    onDelete: async (entry) => {
       const ok = confirm(`Delete '${entry.name}'? This cannot be undone.`);
       if (!ok) return;
-      sessionsStore.delete(entry.id);
+      await sessionsStore.delete(entry.id);
       if (activeSessionId === entry.id) activeSessionId = null;
       refreshSessionList();
     },
@@ -350,9 +350,9 @@ function refreshSessionList() {
 
 renderSaveSlot(document.getElementById("sessions-save-slot"), {
   defaultName: autoName,
-  onSave: (name) => {
+  onSave: async (name) => {
     const { panes, vaultConfig } = currentSnapshot();
-    const entry = sessionsStore.save({ name, panes, vaultConfig });
+    const entry = await sessionsStore.save({ name, panes, vaultConfig });
     activeSessionId = entry.id;
     refreshSessionList();
   },

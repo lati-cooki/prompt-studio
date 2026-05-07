@@ -1,38 +1,10 @@
-import { STORAGE_KEY } from "./config.js";
+import * as api from "./api.js";
 
 const CAP = 100;
 
 export function createSessionsStore(storage) {
-  function readRaw() {
-    const raw = storage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    try {
-      const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed : [];
-    } catch (err) {
-      console.warn("Failed to parse sessions from storage:", err);
-      return [];
-    }
-  }
-
-  function writeRaw(entries) {
-    // On QuotaExceededError, progressively drop the oldest entry and retry
-    // until it fits or the list is empty. Rethrow anything else.
-    while (true) {
-      try {
-        storage.setItem(STORAGE_KEY, JSON.stringify(entries));
-        return;
-      } catch (err) {
-        const isQuota = err && (
-          err.name === "QuotaExceededError" ||
-          err.name === "NS_ERROR_DOM_QUOTA_REACHED" ||
-          err.code === 22 || err.code === 1014
-        );
-        if (!isQuota || entries.length === 0) throw err;
-        entries.pop();
-      }
-    }
-  }
+  // `storage` parameter is ignored now since we use the API,
+  // but kept for signature compatibility with test fakes if needed.
 
   function nowIso() {
     return new Date().toISOString();
@@ -44,11 +16,16 @@ export function createSessionsStore(storage) {
   }
 
   return {
-    load() {
-      return readRaw();
+    async load() {
+      try {
+        return await api.fetchSessions();
+      } catch (err) {
+        console.warn("Failed to load sessions from API:", err);
+        return [];
+      }
     },
 
-    save({ name, panes, vaultConfig }) {
+    async save({ name, panes, vaultConfig }) {
       const now = nowIso();
       const entry = {
         id:        newId(),
@@ -58,30 +35,33 @@ export function createSessionsStore(storage) {
         panes,
         vaultConfig,
       };
-      const entries = readRaw();
-      entries.unshift(entry);
-      if (entries.length > CAP) entries.length = CAP;
-      writeRaw(entries);
-      return entry;
+
+      try {
+        await api.saveSession(entry);
+        return entry;
+      } catch (err) {
+        console.warn("Failed to save session to API:", err);
+        throw err;
+      }
     },
 
-    rename(id, newName) {
-      const entries = readRaw();
-      const entry = entries.find(e => e.id === id);
-      if (!entry) return null;
-      entry.name = newName;
-      entry.updatedAt = nowIso();
-      writeRaw(entries);
-      return entry;
+    async rename(id, newName) {
+      try {
+        return await api.renameSession(id, newName);
+      } catch (err) {
+        console.warn("Failed to rename session via API:", err);
+        return null;
+      }
     },
 
-    delete(id) {
-      const entries = readRaw();
-      const idx = entries.findIndex(e => e.id === id);
-      if (idx === -1) return false;
-      entries.splice(idx, 1);
-      writeRaw(entries);
-      return true;
+    async delete(id) {
+      try {
+        await api.deleteSession(id);
+        return true;
+      } catch (err) {
+        console.warn("Failed to delete session via API:", err);
+        return false;
+      }
     },
   };
 }
@@ -92,4 +72,19 @@ export function resolveModelKey(saved, modelKeys, fallbackKey) {
     console.warn(`Unknown modelKey "${saved}" in saved session; falling back to "${fallbackKey}"`);
   }
   return fallbackKey;
+}
+
+export function exportToRegistryDraft(session) {
+  const primaryPane = session.panes[0];
+  const draft = {
+    id: session.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || "draft",
+    version: "0.1.0",
+    status: "draft",
+    tier: "audit",
+    owner: "unknown",
+    body: primaryPane.systemPrompt,
+    use_case: "Draft exported from sandbox",
+    default_model: primaryPane.modelKey
+  };
+  return draft;
 }

@@ -1,0 +1,6 @@
+.DS_Store
+*.db
+eval_report_*.md
+temp_eval_*.md
+__pycache__/
+node_modules/

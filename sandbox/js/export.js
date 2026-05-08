@@ -35,8 +35,38 @@ export function buildMarkdown(snapshot, exportedName) {
   return frontmatter + sections.join("\n");
 }
 
+export function buildRegistryDraft(snapshot, paneIndex = 0) {
+  const { name, panes } = snapshot;
+  const pane = panes[paneIndex];
+  if (!pane) return null;
+
+  return {
+    id: slugify(name),
+    version: "1.0.0",
+    status: "draft",
+    tier: "audit",
+    owner: "troy_builds", // Default owner per Registry INDEX.json
+    body: pane.systemPrompt,
+    use_case: `Draft exported from Sandbox session: ${name}`,
+    metadata: {
+      exported_at: new Date().toISOString(),
+      original_session_name: name,
+      model_key: pane.modelKey
+    }
+  };
+}
+
 export function triggerMarkdownDownload({ filename, markdown }) {
   const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
+  downloadBlob(blob, filename);
+}
+
+export function triggerJsonDownload({ filename, json }) {
+  const blob = new Blob([JSON.stringify(json, null, 2)], { type: "application/json;charset=utf-8" });
+  downloadBlob(blob, filename);
+}
+
+function downloadBlob(blob, filename) {
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement("a");
   a.href     = url;
@@ -47,14 +77,25 @@ export function triggerMarkdownDownload({ filename, markdown }) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-export function renderExportSlot(slot, { onExport }) {
+export function renderExportSlot(slot, { onExportMarkdown, onExportRegistry }) {
   slot.innerHTML = "";
-  const button = document.createElement("button");
-  button.textContent = "Export current as Markdown";
-  button.className   = "secondary";
-  button.style.width = "100%";
-  button.addEventListener("click", onExport);
-  slot.appendChild(button);
+  slot.style.display = "flex";
+  slot.style.flexDirection = "column";
+  slot.style.gap = "4px";
+
+  const mdBtn = document.createElement("button");
+  mdBtn.textContent = "Export as Markdown";
+  mdBtn.className   = "secondary";
+  mdBtn.style.width = "100%";
+  mdBtn.addEventListener("click", onExportMarkdown);
+
+  const regBtn = document.createElement("button");
+  regBtn.textContent = "Export as Registry Draft (JSON)";
+  regBtn.className   = "secondary";
+  regBtn.style.width = "100%";
+  regBtn.addEventListener("click", onExportRegistry);
+
+  slot.append(mdBtn, regBtn);
 }
 
 export function slugify(name) {

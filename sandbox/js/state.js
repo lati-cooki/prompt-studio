@@ -36,8 +36,23 @@ export function createPaneState(initialPrompt) {
       notify();
     },
     buildTurnMessages(vaultMessage) {
-      if (!vaultMessage) return [...this.messages];
-      return [this.messages[0], vaultMessage, ...this.messages.slice(1)];
+      let sys = this.systemPrompt;
+      const allMsgs = [...this.messages];
+      const lastUser = [...allMsgs].reverse().find(m => m.role === "user");
+
+      let filteredMsgs = allMsgs;
+      if (sys.includes("{{user inserts directive here}}") && lastUser) {
+        sys = sys.replace("{{user inserts directive here}}", lastUser.content);
+        // Replace the injected user message with a simple trigger
+        const lastIdx = allMsgs.lastIndexOf(lastUser);
+        filteredMsgs = allMsgs.map((m, i) => 
+          i === lastIdx ? { ...m, content: "Proceed with the directive above." } : m
+        );
+      }
+
+      const msgs = [{ role: "system", content: sys }, ...filteredMsgs.slice(1)];
+      if (!vaultMessage) return msgs;
+      return [msgs[0], vaultMessage, ...msgs.slice(1)];
     },
     subscribe(fn) {
       subscribers.add(fn);

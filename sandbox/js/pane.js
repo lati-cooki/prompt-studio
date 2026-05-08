@@ -4,7 +4,7 @@ function oneLinePreview(text) {
   return firstLine.slice(0, 77) + "…";
 }
 
-export function createPane({ id, container, initialPrompt, modelKeys = [], initialModelKey = null }) {
+export function createPane({ id, container, initialPrompt, modelKeys = [], initialModelKey = null, registryPrompts = [] }) {
   // ── Section ──────────────────────────────────────────
   const section = document.createElement("section");
   section.className      = "pane";
@@ -22,7 +22,36 @@ export function createPane({ id, container, initialPrompt, modelKeys = [], initi
   promptLabel.className   = "pane-prompt-label";
   promptLabel.textContent = "SYSTEM PROMPT";
 
+  // Registry Dropdown
+  const regLabel = document.createElement("span");
+  regLabel.className = "pane-prompt-label";
+  regLabel.style.marginLeft = "auto";
+  regLabel.style.marginRight = "8px";
+  regLabel.style.opacity = "0.5";
+  regLabel.textContent = "Registry:";
+
+  const regSelect = document.createElement("select");
+  regSelect.className = "pane-model-select";
+  regSelect.style.border = "1px solid var(--hair)";
+  regSelect.style.padding = "2px 6px";
+  regSelect.style.borderRadius = "3px";
+  regSelect.style.maxWidth = "160px";
+  
+  const defaultOpt = document.createElement("option");
+  defaultOpt.value = "";
+  defaultOpt.textContent = "— Select —";
+  regSelect.appendChild(defaultOpt);
+
+  for (const p of registryPrompts) {
+    const opt = document.createElement("option");
+    opt.value = p.id;
+    opt.textContent = `${p.id} v${p.version}`;
+    regSelect.appendChild(opt);
+  }
+
   labelRow.appendChild(promptLabel);
+  labelRow.appendChild(regLabel);
+  labelRow.appendChild(regSelect);
 
   // Meta row (badge + model select + spacer + meter slot)
   const metaRow = document.createElement("div");
@@ -131,6 +160,25 @@ export function createPane({ id, container, initialPrompt, modelKeys = [], initi
   });
 
   applyReset.addEventListener("click", exitEditing);
+
+  regSelect.addEventListener("change", () => {
+    const selected = registryPrompts.find(p => p.id === regSelect.value);
+    if (selected) {
+      // Strip markdown headers if they exist (Registry stores them as MD files)
+      let body = selected.body;
+      if (body.includes("---")) {
+         body = body.split("---").pop().trim();
+      }
+      // Also strip common "## The prompt body" or similar headers
+      body = body.replace(/^# .*\n+/gm, "").trim();
+
+      textarea.value = body;
+      refreshPreview();
+      applyReset.click();
+      // Reset dropdown to default
+      regSelect.value = "";
+    }
+  });
 
   // ── Log ──────────────────────────────────────────────
   const log = document.createElement("main");

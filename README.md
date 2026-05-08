@@ -2,30 +2,42 @@
 
 Prompt Studio is a unified, automated environment for drafting, testing, registering, and evaluating AI prompts. It merges the live iteration capabilities of a local `sandbox` with the rigid version control and evaluation schema of a `registry`.
 
-Crucially, **Prompt Studio is designed to be operated by Jules**, Google's asynchronous coding agent.
+## Operational Infrastructure
+
+The repository has been fully integrated into a single workflow powered by:
+- **Unified Backend**: A shared SQLite database (`prompt_studio.db`) stores both live Sandbox sessions and production-ready Registry assets.
+- **Flask API**: A Python-based service (`server.py`) that serves the UIs and orchestrates the promotion and evaluation logic.
+- **Automated Workflow**: A one-click loop that takes a prompt from "Idea" (Sandbox) → "Draft" (Registry) → "Validated Asset" (Evaluation).
 
 ## Repository Structure
 
-- `sandbox/`: The live prompt iteration UI. Connects to local MLX models or proxies. (Sourced from `prompt-sandbox`).
-- `registry/`: The version-controlled archive of production-ready prompts, evaluations, and the `INDEX.json` schema. (Sourced from `prompt-registry`).
-- `JULES_WORKFLOW.md`: The operational manual for Jules in this repository.
-- `TODO.md`: The immediate backlog of tasks to assign to Jules.
+- `sandbox/`: The live iteration UI. Now connects directly to the SQLite backend.
+- `registry/`: The dashboard for production prompts and evaluation results.
+- `scripts/`: Python and Bash utilities for the automated lifecycle:
+    - `evaluate_prompt.py`: Runs multi-model stress tests against benchmark directives.
+    - `register_prompt.py`: Formalizes the promotion of a validated draft to production status.
+    - `execute_with_jules.sh`: Bridges registered protocols to autonomous task execution.
+- `schema.sql`: The unified database definition.
+- `server.py`: The core API service (port 7777).
 
-## The Tri-Role Jules Architecture
+## The Integrated Workflow
 
-Jules acts as the primary engine for this repository in three distinct capacities:
-
-1. **Jules as the Developer:** Actively building and merging the infrastructure. Its first goal is to replace the Sandbox's `localStorage` and the Registry's hardcoded UI array with a unified backend (e.g., SQLite) so both systems talk to the same database.
-2. **Jules as the Evaluator:** Acting as an automated CI/CD pipeline for prompts. When a draft prompt reaches maturity in the sandbox, Jules runs it against the `evals/` suite across multiple models, calculates the quality scores, and automatically commits it to the registry if it passes.
-3. **Jules as the Executor:** Consuming the production prompts from the registry (like the `consensus_protocol`) to autonomously execute complex reasoning tasks defined in GitHub issues.
+1.  **Iterate**: Use the **Sandbox** (:7777/sandbox) to refine your prompt against local MLX models.
+2.  **Promote**: Use the **"Promote to Registry"** button in the Sandbox to instantly move your iteration into the shared database.
+3.  **Evaluate**: Use the **Registry Dashboard** (:7777/registry) to trigger an **Automated Eval**. This runs a multi-model benchmark and persists the strategic findings to the DB.
+4.  **Execute**: Run `./scripts/execute_with_jules.sh <prompt_id> "<task>"` to solve real-world problems using your validated assets.
 
 ## Quickstart
 
+### 1. Launch the Ecosystem
+Use the unified launcher on your desktop or run manually:
 ```bash
 cd prompt-studio
-# Review the tasks
-cat TODO.md
-
-# Assign the first task to Jules
-cat TODO.md | head -n 3 | tail -n 1 | jules new
+~/vault-env/bin/python server.py
 ```
+
+### 2. Connect Models
+Ensure your local MLX servers are active (standard ports are 8080 and 8091).
+
+### 3. Review the Backlog
+See `TODO.md` for upcoming Phase 4 enhancements.

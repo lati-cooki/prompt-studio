@@ -88,6 +88,7 @@ const $segCompare    = document.getElementById("seg-compare");
 const $stopBoth      = document.getElementById("stop-both");
 const $exportMdBtn   = document.getElementById("export-md-btn");
 const $exportRegBtn  = document.getElementById("export-reg-btn");
+const $evalBtn       = document.getElementById("eval-btn");
 const $promoteBtn    = document.getElementById("promote-btn");
 const $composerLabel = document.getElementById("composer-label");
 const $sendHint      = document.getElementById("send-hint");
@@ -352,6 +353,35 @@ $exportRegBtn.addEventListener("click", () => {
   const draft    = buildRegistryDraft(snapshot, 0);
   const date     = new Date().toISOString().slice(0, 10);
   triggerJsonDownload({ filename: `${slugify(name)}-${date}.json`, json: draft });
+});
+
+$evalBtn.addEventListener("click", async () => {
+  if (!paneA) return;
+  const originalText = $evalBtn.textContent;
+  $evalBtn.textContent = "Evaluating...";
+  $evalBtn.disabled = true;
+
+  try {
+    const res = await fetch("/api/evaluate_raw", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        body: paneA.textarea.value,
+        model: MODELS[modelKeyA].id + ":" + MODELS[modelKeyA].endpoint.replace("/v1/chat/completions", "")
+      })
+    });
+    const result = await res.json();
+    if (res.ok) {
+      alert(`Evaluation complete! Report: ${result.report}`);
+    } else {
+      alert(`Evaluation failed: ${result.error}`);
+    }
+  } catch (err) {
+    alert(`Error: ${err.message}`);
+  } finally {
+    $evalBtn.textContent = originalText;
+    $evalBtn.disabled = false;
+  }
 });
 
 $promoteBtn.addEventListener("click", async () => {

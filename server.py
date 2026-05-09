@@ -185,6 +185,36 @@ def trigger_evaluation():
         return jsonify({"status": "evaluated", "report": report_file, "output": result.stdout})
     except Exception as e: return jsonify({"error": str(e)}), 500
 
+@app.route('/api/evaluate_raw', methods=['POST'])
+def trigger_raw_evaluation():
+    """Triggers the evaluation script for a raw prompt body."""
+    data = request.json
+    body = data.get('body')
+    model = data.get('model', 'mlx-community/Qwen3-4B-Instruct-2507-4bit:localhost:8091')
+    directive = 'registry/evals/strategiai_directive.md'
+    
+    if not body:
+        return jsonify({"error": "Prompt body is required"}), 400
+        
+    temp_path = f"temp_raw_eval_{int(datetime.now().timestamp())}.md"
+    with open(temp_path, 'w') as f:
+        f.write(body)
+        
+    try:
+        cmd = [sys.executable, "scripts/evaluate_prompt.py", temp_path, directive, model]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+            
+        if result.returncode != 0:
+            return jsonify({"error": "Evaluation script failed", "details": result.stderr}), 500
+            
+        report_file = next((l.split("Report saved to:")[1].strip() for l in result.stdout.split('\n') if "Report saved to:" in l), "")
+        return jsonify({"status": "evaluated", "report": report_file})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 if __name__ == '__main__':
     init_db()
     app.run(host='0.0.0.0', port=7777, threaded=True, debug=True)

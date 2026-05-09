@@ -2,7 +2,6 @@ import http.server
 import socketserver
 import json
 import sqlite3
-import os
 
 DB_PATH = 'prompt_studio.db'
 PORT = 8000

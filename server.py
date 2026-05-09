@@ -45,6 +45,8 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
     def do_POST(self):
         if self.path == '/api/sessions':
             self.handle_post_sessions()
+        elif self.path == '/api/prompts':
+            self.handle_post_prompts()
         else:
             self.send_error(404)
 
@@ -52,6 +54,9 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         if self.path.startswith('/api/sessions/'):
             session_id = self.path.split('/')[-1]
             self.handle_put_session(session_id)
+        elif self.path.startswith('/api/prompts/'):
+            prompt_id = self.path.split('/')[-1]
+            self.handle_put_prompt(prompt_id)
         else:
             self.send_error(404)
 
@@ -59,6 +64,9 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         if self.path.startswith('/api/sessions/'):
             session_id = self.path.split('/')[-1]
             self.handle_delete_session(session_id)
+        elif self.path.startswith('/api/prompts/'):
+            prompt_id = self.path.split('/')[-1]
+            self.handle_delete_prompt(prompt_id)
         else:
             self.send_error(404)
 
@@ -67,7 +75,6 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         body = self.rfile.read(content_length)
         return json.loads(body.decode('utf-8'))
 
-    # Will implement these methods in the next step
     def handle_get_sessions(self):
         conn = self.get_db()
         cursor = conn.cursor()
@@ -101,16 +108,83 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         conn.close()
         self.send_json({"status": "success"})
 
+    def handle_delete_prompt(self, prompt_id):
+        conn = self.get_db()
+        cursor = conn.cursor()
+
+        cursor.execute("DELETE FROM prompts WHERE id = ?", (prompt_id,))
+        conn.commit()
+        conn.close()
+        self.send_json({"status": "success"})
+
+    def handle_put_prompt(self, prompt_id):
+        data = self.read_json_body()
+        conn = self.get_db()
+        cursor = conn.cursor()
+
+        mapping = {
+            "version": "version",
+            "status": "status",
+            "tier": "tier",
+            "owner": "owner",
+            "body": "body",
+            "useCase": "use_case",
+            "costPerRunUsd": "cost_per_run_usd",
+            "tokensPromptBody": "tokens_prompt_body",
+            "defaultModel": "default_model",
+            "evalStatus": "eval_status",
+            "file": "file",
+            "notes": "notes",
+            "composes": "composes",
+            "testedOn": "tested_on",
+            "updatedAt": "updated_at"
+        }
+
+        fields = []
+        params = []
+        for json_key, db_col in mapping.items():
+            if json_key in data:
+                fields.append(f"{db_col} = ?")
+                val = data[json_key]
+                if json_key in ["composes", "testedOn"]:
+                    val = json.dumps(val)
+                params.append(val)
+
+        if fields:
+            query = f"UPDATE prompts SET {', '.join(fields)} WHERE id = ?"
+            params.append(prompt_id)
+            cursor.execute(query, tuple(params))
+            conn.commit()
+
+        conn.close()
+        self.send_json({"status": "success"})
+
     def handle_put_session(self, session_id):
         data = self.read_json_body()
         conn = self.get_db()
         cursor = conn.cursor()
 
-        cursor.execute(
-            "UPDATE sessions SET name = ? WHERE id = ?",
-            (data["name"], session_id)
-        )
-        conn.commit()
+        fields = []
+        params = []
+        if "name" in data:
+            fields.append("name = ?")
+            params.append(data["name"])
+        if "panes" in data:
+            fields.append("panes = ?")
+            params.append(json.dumps(data["panes"]))
+        if "vaultConfig" in data:
+            fields.append("vault_config = ?")
+            params.append(json.dumps(data["vaultConfig"]))
+        if "updatedAt" in data:
+            fields.append("updated_at = ?")
+            params.append(data["updatedAt"])
+
+        if fields:
+            query = f"UPDATE sessions SET {', '.join(fields)} WHERE id = ?"
+            params.append(session_id)
+            cursor.execute(query, tuple(params))
+            conn.commit()
+
         conn.close()
         self.send_json({"status": "success"})
 
@@ -119,6 +193,32 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         cursor = conn.cursor()
 
         cursor.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
+        conn.commit()
+        conn.close()
+        self.send_json({"status": "success"})
+
+    def handle_post_prompts(self):
+        data = self.read_json_body()
+        conn = self.get_db()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """INSERT INTO prompts (
+                id, version, status, tier, owner, body, use_case,
+                cost_per_run_usd, tokens_prompt_body, default_model,
+                eval_status, file, notes, composes, tested_on,
+                created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                data.get("id"), data.get("version"), data.get("status"), data.get("tier"),
+                data.get("owner"), data.get("body"), data.get("useCase"),
+                data.get("costPerRunUsd"), data.get("tokensPromptBody"),
+                data.get("defaultModel"), data.get("evalStatus"), data.get("file"),
+                data.get("notes"), json.dumps(data.get("composes", [])),
+                json.dumps(data.get("testedOn", [])), data.get("createdAt"),
+                data.get("updatedAt")
+            )
+        )
         conn.commit()
         conn.close()
         self.send_json({"status": "success"})

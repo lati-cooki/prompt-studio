@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+server.log
+test_api.py
+prompt_studio.db

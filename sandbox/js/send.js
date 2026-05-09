@@ -71,6 +71,7 @@ async function streamOnePane({ state, pane, model, vaultMessage, vaultResults })
     };
 
     const applyEvents = (events) => {
+      let needsScroll = false;
       for (const event of events) {
         const delta = extractSSEDelta(event);
         if (!delta || delta.done) continue;
@@ -79,8 +80,9 @@ async function streamOnePane({ state, pane, model, vaultMessage, vaultResults })
         if (r || c) initSpans();
         if (r) { reasoning += r; reasoningEl.textContent = reasoning; }
         if (c) { content   += c; contentEl.textContent   = content;   }
-        if (r || c) pane.log.scrollTop = pane.log.scrollHeight;
+        if (r || c) needsScroll = true;
       }
+      if (needsScroll) pane.log.scrollTop = pane.log.scrollHeight;
     };
 
     while (true) {

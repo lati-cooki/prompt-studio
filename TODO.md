@@ -16,5 +16,5 @@ Assign these tasks to Jules using `jules new "<task string>"`.
 
 ## Phase 4: Future Enhancements
 - [ ] Implement the Composition Graph in the Registry UI, allowing visual mapping of which prompts call which other prompts.
-- [ ] Add "One-Click Evaluation" to the Sandbox UI that triggers the `scripts/evaluate_prompt.py` on the current session.
+- [x] Add "One-Click Evaluation" to the Sandbox UI that triggers the `scripts/evaluate_prompt.py` on the current session.
 - [ ] Build a "Prompt Gallery" that allows browsing and cloning prompts from public registries.

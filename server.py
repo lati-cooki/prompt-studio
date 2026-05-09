@@ -29,6 +29,12 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(json.dumps(data).encode('utf-8'))
 
+    def send_raw_json(self, json_string, status=200):
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json_string.encode('utf-8'))
+
     def do_GET(self):
         if self.path == '/api/sessions':
             self.handle_get_sessions()
@@ -66,21 +72,22 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
     def handle_get_sessions(self):
         conn = self.get_db()
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM sessions ORDER BY created_at DESC")
-        rows = cursor.fetchall()
+        query = """
+            SELECT json_group_array(
+                json_object(
+                    'id', id,
+                    'name', name,
+                    'createdAt', created_at,
+                    'updatedAt', updated_at,
+                    'panes', json(panes),
+                    'vaultConfig', json(vault_config)
+                )
+            ) FROM (SELECT * FROM sessions ORDER BY created_at DESC)
+        """
+        cursor.execute(query)
+        result = cursor.fetchone()[0]
         conn.close()
-
-        sessions = []
-        for row in rows:
-            sessions.append({
-                "id": row["id"],
-                "name": row["name"],
-                "createdAt": row["created_at"],
-                "updatedAt": row["updated_at"],
-                "panes": json.loads(row["panes"]),
-                "vaultConfig": json.loads(row["vault_config"])
-            })
-        self.send_json(sessions)
+        self.send_raw_json(result if result else "[]")
 
     def handle_post_sessions(self):
         data = self.read_json_body()
@@ -120,32 +127,33 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
     def handle_get_prompts(self):
         conn = self.get_db()
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM prompts")
-        rows = cursor.fetchall()
+        query = """
+            SELECT json_group_array(
+                json_object(
+                    'id', id,
+                    'version', version,
+                    'status', status,
+                    'tier', tier,
+                    'owner', owner,
+                    'body', body,
+                    'useCase', use_case,
+                    'costPerRunUsd', cost_per_run_usd,
+                    'tokensPromptBody', tokens_prompt_body,
+                    'defaultModel', default_model,
+                    'evalStatus', eval_status,
+                    'file', file,
+                    'notes', notes,
+                    'composes', json(CASE WHEN composes IS NOT NULL AND composes != '' THEN composes ELSE '[]' END),
+                    'testedOn', json(CASE WHEN tested_on IS NOT NULL AND tested_on != '' THEN tested_on ELSE '[]' END),
+                    'createdAt', created_at,
+                    'updatedAt', updated_at
+                )
+            ) FROM prompts
+        """
+        cursor.execute(query)
+        result = cursor.fetchone()[0]
         conn.close()
-
-        prompts = []
-        for row in rows:
-            prompts.append({
-                "id": row["id"],
-                "version": row["version"],
-                "status": row["status"],
-                "tier": row["tier"],
-                "owner": row["owner"],
-                "body": row["body"],
-                "useCase": row["use_case"],
-                "costPerRunUsd": row["cost_per_run_usd"],
-                "tokensPromptBody": row["tokens_prompt_body"],
-                "defaultModel": row["default_model"],
-                "evalStatus": row["eval_status"],
-                "file": row["file"],
-                "notes": row["notes"],
-                "composes": json.loads(row["composes"]) if row["composes"] else [],
-                "testedOn": json.loads(row["tested_on"]) if row["tested_on"] else [],
-                "createdAt": row["created_at"],
-                "updatedAt": row["updated_at"]
-            })
-        self.send_json(prompts)
+        self.send_raw_json(result if result else "[]")
 
 if __name__ == '__main__':
     with socketserver.TCPServer(("", PORT), PromptStudioHandler) as httpd:

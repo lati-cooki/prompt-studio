@@ -351,10 +351,15 @@ async function refreshSessionList() {
 renderSaveSlot(document.getElementById("sessions-save-slot"), {
   defaultName: autoName,
   onSave: async (name) => {
-    const { panes, vaultConfig } = currentSnapshot();
-    const entry = await sessionsStore.save({ name, panes, vaultConfig });
-    activeSessionId = entry.id;
-    refreshSessionList();
+    try {
+      const { panes, vaultConfig } = currentSnapshot();
+      const entry = await sessionsStore.save({ name, panes, vaultConfig });
+      activeSessionId = entry.id;
+      refreshSessionList();
+    } catch (err) {
+      $vaultStatus.textContent = `Save failed: ${err.message}`;
+      setTimeout(() => { $vaultStatus.textContent = ""; }, 6000);
+    }
   },
 });
 

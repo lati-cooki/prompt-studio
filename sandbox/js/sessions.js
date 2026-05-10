@@ -1,11 +1,6 @@
 import * as api from "./api.js";
 
-const CAP = 100;
-
-export function createSessionsStore(storage) {
-  // `storage` parameter is ignored now since we use the API,
-  // but kept for signature compatibility with test fakes if needed.
-
+export function createSessionsStore() {
   function nowIso() {
     return new Date().toISOString();
   }
@@ -75,6 +70,9 @@ export function resolveModelKey(saved, modelKeys, fallbackKey) {
 }
 
 export function exportToRegistryDraft(session) {
+  if (!session?.panes?.length) {
+    throw new Error("exportToRegistryDraft: session has no panes");
+  }
   const primaryPane = session.panes[0];
   const draft = {
     id: session.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || "draft",

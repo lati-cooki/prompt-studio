@@ -233,7 +233,7 @@ function exitCompare() {
 $segSingle.addEventListener("click",  () => { if (paneB)  exitCompare(); });
 $segCompare.addEventListener("click", () => { if (!paneB) enterCompare(); });
 
-const sessionsStore = createSessionsStore(localStorage);
+const sessionsStore = createSessionsStore();
 
 function autoName() {
   for (const { state } of activePanes()) {

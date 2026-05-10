@@ -3,239 +3,323 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Prompt Registry v0.1</title>
+<title>Prompt Registry</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:ital,wght@0,300;0,400;0,500;0,600;0,700;1,300;1,400&family=JetBrains+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;1,6..72,300;1,6..72,400&display=swap" rel="stylesheet">
 <style>
-  :root {
-    --bg-primary: #ffffff;
-    --bg-secondary: #f7f5ef;
-    --bg-tertiary: #f0eee5;
-    --text-primary: #1a1a18;
-    --text-secondary: #5f5e5a;
-    --text-tertiary: #888780;
-    --border-tertiary: rgba(0, 0, 0, 0.12);
-    --border-secondary: rgba(0, 0, 0, 0.25);
-    --border-info: #185fa5;
-    --radius-md: 8px;
-    --radius-lg: 12px;
-    --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    --font-mono: "SF Mono", "Monaco", "Inconsolata", "Roboto Mono", monospace;
-  }
+/* ── Tokens ───────────────────────────────────────── */
+:root {
+  --paper:   #f6f3ec;
+  --paper-2: #ede9e0;
+  --paper-3: #e4dfd5;
 
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg-primary: #1a1a18;
-      --bg-secondary: #232321;
-      --bg-tertiary: #2c2c2a;
-      --text-primary: #f0eee5;
-      --text-secondary: #b4b2a9;
-      --text-tertiary: #888780;
-      --border-tertiary: rgba(255, 255, 255, 0.15);
-      --border-secondary: rgba(255, 255, 255, 0.3);
-    }
-  }
+  --ink:   #0c0f14;
+  --ink-2: #2c3038;
+  --ink-3: #5c636b;
+  --ink-4: #9aa0a8;
 
-  * { box-sizing: border-box; }
+  --line:   rgba(12,15,20,0.13);
+  --line-2: rgba(12,15,20,0.07);
+  --line-3: rgba(12,15,20,0.04);
 
-  body {
-    font-family: var(--font-sans);
-    color: var(--text-primary);
-    background: var(--bg-tertiary);
-    margin: 0;
-    padding: 2rem 1rem;
-    line-height: 1.7;
-  }
+  --amber: #a87a00;
+  --green: #2e7048;
+  --red:   #a83830;
+  --teal:  #2a6464;
+  --plum:  #614882;
 
-  .container {
-    max-width: 720px;
-    margin: 0 auto;
-    background: var(--bg-primary);
-    border-radius: var(--radius-lg);
-    padding: 2rem;
-    border: 0.5px solid var(--border-tertiary);
-  }
+  --sans:  'Inter Tight', -apple-system, sans-serif;
+  --mono:  'JetBrains Mono', ui-monospace, monospace;
+  --serif: 'Newsreader', Georgia, serif;
+}
 
-  h1 { font-size: 22px; font-weight: 500; margin: 0 0 4px; }
-  .meta-line { font-size: 13px; color: var(--text-secondary); margin: 0 0 1.5rem; }
+/* ── Reset ────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-font-smoothing: antialiased; }
 
-  .stats {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 8px;
-    margin-bottom: 1.5rem;
-  }
-  .stat {
-    background: var(--bg-secondary);
-    padding: 12px;
-    border-radius: var(--radius-md);
-  }
-  .stat-label { font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }
-  .stat-val { font-size: 22px; font-weight: 500; }
+body {
+  font-family: var(--sans);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink);
+  background: var(--paper-2);
+  margin: 0;
+  padding: 48px 24px 72px;
+}
 
-  .controls {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 1rem;
-    flex-wrap: wrap;
-    align-items: center;
-  }
-  .filter-btn, select, button {
-    font-family: var(--font-sans);
-    font-size: 13px;
-    background: transparent;
-    border: 0.5px solid var(--border-secondary);
-    border-radius: var(--radius-md);
-    padding: 6px 12px;
-    color: var(--text-primary);
-    cursor: pointer;
-    transition: background 0.15s;
-  }
-  .filter-btn:hover, button:hover { background: var(--bg-secondary); }
-  .filter-btn.active { background: var(--bg-secondary); border-color: var(--border-secondary); }
-  .spacer { flex: 1; }
+/* Paper grain */
+body::after {
+  content: '';
+  position: fixed; inset: 0;
+  pointer-events: none; z-index: 9999; opacity: 0.025;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)'/%3E%3C/svg%3E");
+}
 
-  .row {
-    background: var(--bg-primary);
-    border: 0.5px solid var(--border-tertiary);
-    border-radius: var(--radius-lg);
-    padding: 12px 16px;
-    cursor: pointer;
-    margin-bottom: 8px;
-    transition: border-color 0.1s;
-  }
-  .row:hover { border-color: var(--border-secondary); }
-  .row.expanded { border-color: var(--border-info); }
+/* ── Layout ───────────────────────────────────────── */
+.wrap {
+  max-width: 780px;
+  margin: 0 auto;
+}
 
-  .row-main {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
-  }
-  .row-id-block { flex: 1; min-width: 0; }
-  .row-id { display: flex; align-items: baseline; gap: 8px; }
-  .row-id .id { font-family: var(--font-mono); font-weight: 500; font-size: 13px; }
-  .row-id .ver { font-size: 12px; color: var(--text-secondary); }
-  .row-use { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+/* ── Header ───────────────────────────────────────── */
+.doc-header {
+  border-top: 1.5px solid var(--ink);
+  border-bottom: 1px solid var(--line);
+  padding: 20px 0 16px;
+  margin-bottom: 28px;
+}
+.doc-eyebrow {
+  font-family: var(--mono);
+  font-size: 9px; letter-spacing: 0.2em;
+  text-transform: uppercase; color: var(--ink-4);
+  margin-bottom: 8px;
+}
+.doc-title {
+  font-family: var(--serif);
+  font-size: 28px; font-weight: 400;
+  letter-spacing: -0.01em; line-height: 1.2;
+  color: var(--ink); margin: 0 0 6px;
+}
+.doc-meta {
+  font-family: var(--mono); font-size: 10.5px;
+  color: var(--ink-4); letter-spacing: 0.02em;
+}
+.doc-meta span + span::before { content: ' · '; }
 
-  .badges { display: flex; gap: 6px; align-items: center; }
-  .badge {
-    display: inline-block;
-    font-size: 11px;
-    padding: 2px 8px;
-    border-radius: var(--radius-md);
-    font-weight: 500;
-  }
-  .b-prod { background: #EAF3DE; color: #27500A; }
-  .b-active { background: #E6F1FB; color: #0C447C; }
-  .b-draft { background: #FAEEDA; color: #633806; }
-  .b-deprecated { background: #F1EFE8; color: #444441; }
-  .b-tier-audit { background: #EEEDFE; color: #3C3489; }
-  .b-tier-advisory { background: #E1F5EE; color: #085041; }
-  .b-tier-reference { background: #F1EFE8; color: #444441; }
+/* ── Info banner ──────────────────────────────────── */
+.info-banner {
+  background: var(--paper-3);
+  border: 1px solid var(--line-2);
+  border-left: 2px solid var(--ink-4);
+  padding: 10px 14px;
+  margin-bottom: 24px;
+  font-family: var(--mono); font-size: 10.5px;
+  color: var(--ink-3); line-height: 1.6;
+}
 
-  @media (prefers-color-scheme: dark) {
-    .b-prod { background: #173404; color: #C0DD97; }
-    .b-active { background: #0C447C; color: #B5D4F4; }
-    .b-draft { background: #412402; color: #FAC775; }
-    .b-deprecated { background: #2C2C2A; color: #D3D1C7; }
-    .b-tier-audit { background: #26215C; color: #CECBF6; }
-    .b-tier-advisory { background: #04342C; color: #9FE1CB; }
-    .b-tier-reference { background: #2C2C2A; color: #D3D1C7; }
-  }
+/* ── Stats ────────────────────────────────────────── */
+.stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  border: 1px solid var(--line);
+  margin-bottom: 24px;
+}
+.stat {
+  padding: 14px 16px;
+  border-right: 1px solid var(--line);
+}
+.stat:last-child { border-right: none; }
+.stat-label {
+  font-family: var(--mono); font-size: 9px;
+  letter-spacing: 0.16em; text-transform: uppercase;
+  color: var(--ink-4); margin-bottom: 6px;
+}
+.stat-val {
+  font-family: var(--sans); font-size: 26px;
+  font-weight: 500; letter-spacing: -0.02em; color: var(--ink);
+}
 
-  .row-cost { text-align: right; min-width: 70px; }
-  .row-cost-amt { font-size: 13px; font-weight: 500; }
-  .row-cost-tok { font-size: 12px; color: var(--text-secondary); }
+/* ── Controls ─────────────────────────────────────── */
+.controls {
+  display: flex; gap: 6px; align-items: center;
+  flex-wrap: wrap; margin-bottom: 16px;
+}
+.filter-btn {
+  font-family: var(--mono); font-size: 10px;
+  letter-spacing: 0.06em; text-transform: uppercase;
+  background: transparent; color: var(--ink-3);
+  border: 1px solid var(--line); padding: 5px 12px;
+  cursor: pointer; transition: color 0.1s, background 0.1s, border-color 0.1s;
+}
+.filter-btn:hover { color: var(--ink); border-color: var(--line); background: var(--paper); }
+.filter-btn.active {
+  background: var(--ink); color: var(--paper);
+  border-color: var(--ink);
+}
+.spacer { flex: 1; }
+select {
+  font-family: var(--mono); font-size: 10px;
+  letter-spacing: 0.04em; background: var(--paper);
+  border: 1px solid var(--line); color: var(--ink-3);
+  padding: 5px 10px; cursor: pointer; outline: none;
+  appearance: none; -webkit-appearance: none;
+}
 
-  .detail {
-    display: none;
-    padding-top: 12px;
-    margin-top: 12px;
-    border-top: 0.5px solid var(--border-tertiary);
-  }
-  .row.expanded .detail { display: block; }
+/* ── Registry rows ────────────────────────────────── */
+#rows { border-top: 1px solid var(--line); }
 
-  .kv {
-    display: grid;
-    grid-template-columns: 110px 1fr;
-    gap: 4px 12px;
-    font-size: 12px;
-    margin-bottom: 12px;
-  }
-  .kv dt { color: var(--text-secondary); }
-  .kv dd { margin: 0; }
-  .kv .mono { font-family: var(--font-mono); }
+.row {
+  border-bottom: 1px solid var(--line-2);
+  cursor: pointer;
+  transition: background 0.08s;
+}
+.row:hover { background: rgba(12,15,20,0.02); }
+.row.expanded { background: var(--paper); border-bottom-color: var(--line); }
 
-  .actions { display: flex; gap: 6px; flex-wrap: wrap; }
-  .actions button { font-size: 12px; padding: 4px 10px; }
+.row-main {
+  display: flex; align-items: baseline;
+  gap: 14px; flex-wrap: wrap;
+  padding: 12px 14px 12px 0;
+}
 
-  .footer {
-    margin-top: 1.5rem;
-    padding-top: 1rem;
-    border-top: 0.5px solid var(--border-tertiary);
-    font-size: 12px;
-    color: var(--text-secondary);
-  }
+/* Leading marker */
+.row-marker {
+  font-family: var(--mono); font-size: 10px;
+  color: var(--ink-4); width: 20px; flex-shrink: 0;
+  text-align: right; padding-top: 1px;
+  transition: color 0.1s;
+}
+.row.expanded .row-marker { color: var(--teal); }
 
-  .info-banner {
-    background: var(--bg-secondary);
-    border: 0.5px solid var(--border-tertiary);
-    border-radius: var(--radius-md);
-    padding: 12px 16px;
-    margin-bottom: 1.5rem;
-    font-size: 13px;
-  }
-  .info-banner strong { font-weight: 500; }
+.row-id-block { flex: 1; min-width: 0; }
+.row-id {
+  display: flex; align-items: baseline; gap: 7px;
+  margin-bottom: 2px;
+}
+.row-id .id {
+  font-family: var(--mono); font-size: 12px; font-weight: 500;
+  color: var(--ink); letter-spacing: -0.01em;
+}
+.row-id .ver {
+  font-family: var(--mono); font-size: 10px; color: var(--ink-4);
+}
+.row-use { font-size: 12px; color: var(--ink-3); }
+
+.badges { display: flex; gap: 5px; align-items: center; flex-shrink: 0; }
+.badge {
+  font-family: var(--mono); font-size: 9px;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  padding: 2px 7px; border: 1px solid currentColor;
+}
+
+/* Status badges */
+.b-production  { color: var(--green); }
+.b-active      { color: var(--teal); }
+.b-draft       { color: var(--amber); }
+.b-deprecated  { color: var(--ink-4); }
+
+/* Tier badges */
+.b-tier-audit     { color: var(--plum); }
+.b-tier-advisory  { color: var(--teal); }
+.b-tier-reference { color: var(--ink-3); }
+
+.row-cost {
+  text-align: right; min-width: 72px; flex-shrink: 0;
+}
+.row-cost-amt {
+  font-family: var(--mono); font-size: 12px;
+  font-weight: 500; color: var(--ink-2);
+}
+.row-cost-tok {
+  font-family: var(--mono); font-size: 10px; color: var(--ink-4);
+}
+
+/* ── Detail (expanded) ────────────────────────────── */
+.detail {
+  display: none;
+  padding: 0 0 16px 20px;
+  border-top: 1px solid var(--line-2);
+  margin-top: 2px;
+}
+.row.expanded .detail { display: block; }
+.detail-inner { padding-top: 14px; }
+
+.kv {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 3px 14px;
+  font-size: 12px;
+  margin-bottom: 14px;
+}
+.kv dt {
+  font-family: var(--mono); font-size: 9.5px;
+  letter-spacing: 0.06em; color: var(--ink-4);
+  text-transform: uppercase; padding-top: 2px;
+}
+.kv dd {
+  margin: 0; color: var(--ink-2);
+}
+.kv .mono { font-family: var(--mono); font-size: 11px; }
+
+.actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.actions button {
+  font-family: var(--mono); font-size: 9.5px;
+  letter-spacing: 0.06em; text-transform: uppercase;
+  background: transparent; color: var(--ink-3);
+  border: 1px solid var(--line); padding: 4px 10px;
+  cursor: pointer; transition: color 0.1s, border-color 0.1s, background 0.1s;
+}
+.actions button:hover {
+  color: var(--ink); border-color: var(--line);
+  background: var(--paper-2);
+}
+
+/* ── Footer ───────────────────────────────────────── */
+.doc-footer {
+  margin-top: 32px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  font-family: var(--mono); font-size: 10px;
+  color: var(--ink-4); line-height: 1.7;
+}
 </style>
 </head>
 <body>
-<div class="container">
+<div class="wrap">
 
-<h1>Prompt registry</h1>
-<p class="meta-line">v0.1 · 7 entries · 2 tiers · 1 eval batch · last updated 2026-05-04</p>
-
-<div class="info-banner">
-  <strong>Standalone snapshot.</strong> This is the offline version of the registry interface. Action buttons describe what they would do in a connected environment; they do not currently send anything.
-</div>
-
-<div class="stats">
-  <div class="stat">
-    <div class="stat-label">Total prompts</div>
-    <div class="stat-val">7</div>
+  <div class="doc-header">
+    <div class="doc-eyebrow">Prompt Studio · Registry · v0.1</div>
+    <h1 class="doc-title">Prompt Registry</h1>
+    <div class="doc-meta">
+      <span>7 entries</span>
+      <span>2 tiers</span>
+      <span>1 eval batch</span>
+      <span>last updated 2026-05-04</span>
+    </div>
   </div>
-  <div class="stat">
-    <div class="stat-label">In production</div>
-    <div class="stat-val">3</div>
-  </div>
-  <div class="stat">
-    <div class="stat-label">Eval coverage</div>
-    <div class="stat-val">57%</div>
-  </div>
-  <div class="stat">
-    <div class="stat-label">Avg cost/run</div>
-    <div class="stat-val">$0.05</div>
-  </div>
-</div>
 
-<div class="controls">
-  <button class="filter-btn active" data-filter="all">All</button>
-  <button class="filter-btn" data-filter="audit">Audit</button>
-  <button class="filter-btn" data-filter="advisory">Advisory</button>
-  <button class="filter-btn" data-filter="reference">Reference</button>
-  <span class="spacer"></span>
-  <select id="sort">
-    <option value="name">Sort: name</option>
-    <option value="cost">Sort: cost</option>
-    <option value="tokens">Sort: tokens</option>
-    <option value="status">Sort: status</option>
-  </select>
-</div>
+  <div class="info-banner">
+    Standalone snapshot. Action buttons describe what they would do in a connected environment — they do not currently send anything.
+  </div>
 
-<div id="rows"></div>
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-label">Total prompts</div>
+      <div class="stat-val">7</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">In production</div>
+      <div class="stat-val">3</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Eval coverage</div>
+      <div class="stat-val">57%</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Avg cost / run</div>
+      <div class="stat-val">$0.05</div>
+    </div>
+  </div>
 
-<div class="footer">
-  Built 2026-05-04 in conversation. No backing store. Action buttons are informational only in this standalone snapshot. To make this live, connect to the JSON in INDEX.json or a database.
-</div>
+  <div class="controls">
+    <button class="filter-btn active" data-filter="all">All</button>
+    <button class="filter-btn" data-filter="audit">Audit</button>
+    <button class="filter-btn" data-filter="advisory">Advisory</button>
+    <button class="filter-btn" data-filter="reference">Reference</button>
+    <span class="spacer"></span>
+    <select id="sort">
+      <option value="name">Sort: name</option>
+      <option value="cost">Sort: cost</option>
+      <option value="tokens">Sort: tokens</option>
+      <option value="status">Sort: status</option>
+    </select>
+  </div>
+
+  <div id="rows"></div>
+
+  <div class="doc-footer">
+    Built 2026-05-04. No backing store. Action buttons are informational only in this standalone snapshot.<br>
+    To make this live, connect to INDEX.json or a database.
+  </div>
 
 </div>
 
@@ -251,20 +335,21 @@ const data = [
 ];
 
 let activeFilter = "all";
-let activeSort = "name";
+let activeSort   = "name";
 
 function render() {
   let rows = data.filter(d => activeFilter === "all" || d.tier === activeFilter);
   rows.sort((a, b) => {
-    if (activeSort === "cost") return (b.cost || 0) - (a.cost || 0);
+    if (activeSort === "cost")   return (b.cost || 0) - (a.cost || 0);
     if (activeSort === "tokens") return (b.tokens || 0) - (a.tokens || 0);
     if (activeSort === "status") return a.status.localeCompare(b.status);
     return a.id.localeCompare(b.id) || a.version.localeCompare(b.version);
   });
 
-  document.getElementById("rows").innerHTML = rows.map(d => `
+  document.getElementById("rows").innerHTML = rows.map((d, i) => `
     <div class="row" data-id="${d.id}-${d.version}">
       <div class="row-main">
+        <span class="row-marker">→</span>
         <div class="row-id-block">
           <div class="row-id">
             <span class="id">${d.id}</span>
@@ -282,16 +367,18 @@ function render() {
         </div>
       </div>
       <div class="detail">
-        <dl class="kv">
-          <dt>Default model</dt><dd class="mono">${d.defaultModel}</dd>
-          <dt>Eval status</dt><dd>${d.evalStatus}</dd>
-          <dt>Notes</dt><dd>${d.note}</dd>
-          <dt>Composes</dt><dd>${d.composes.length ? d.composes.join(", ") : "none"}</dd>
-        </dl>
-        <div class="actions">
-          <button onclick="event.stopPropagation(); alert('Would view body of ${d.id}@${d.version}')">View body</button>
-          <button onclick="event.stopPropagation(); alert('Would run ${d.id}@${d.version} on a new directive')">Run</button>
-          <button onclick="event.stopPropagation(); alert('Would show eval history for ${d.id}@${d.version}')">Eval history</button>
+        <div class="detail-inner">
+          <dl class="kv">
+            <dt>Default model</dt><dd class="mono">${d.defaultModel}</dd>
+            <dt>Eval status</dt><dd>${d.evalStatus}</dd>
+            <dt>Notes</dt><dd>${d.note}</dd>
+            <dt>Composes</dt><dd>${d.composes.length ? d.composes.join(", ") : "none"}</dd>
+          </dl>
+          <div class="actions">
+            <button onclick="event.stopPropagation(); alert('Would view body of ${d.id}@${d.version}')">View body</button>
+            <button onclick="event.stopPropagation(); alert('Would run ${d.id}@${d.version}')">Run</button>
+            <button onclick="event.stopPropagation(); alert('Would show eval history for ${d.id}@${d.version}')">Eval history</button>
+          </div>
         </div>
       </div>
     </div>

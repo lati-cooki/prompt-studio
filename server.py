@@ -1,4 +1,5 @@
 import http.server
+import mimetypes
 import socketserver
 import json
 import sqlite3
@@ -44,18 +45,21 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             self.serve_file('sandbox/index.html', 'text/html')
         elif self.path in ('/registry', '/registry/'):
             self.serve_file('registry/interface/registry_widget.html', 'text/html')
+        elif self.path.startswith('/js/'):
+            self.serve_file('sandbox' + self.path, 'application/javascript')
         else:
             self.send_error(404)
 
     def do_HEAD(self):
         self.send_error(404)
 
-    def serve_file(self, path, content_type):
+    def serve_file(self, path, content_type=None):
         try:
             with open(path, 'rb') as f:
                 data = f.read()
+            mime = content_type or mimetypes.guess_type(path)[0] or 'application/octet-stream'
             self.send_response(200)
-            self.send_header('Content-Type', content_type)
+            self.send_header('Content-Type', mime)
             self.send_header('Content-Length', str(len(data)))
             self.end_headers()
             self.wfile.write(data)

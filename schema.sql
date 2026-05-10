@@ -7,6 +7,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     vault_config TEXT NOT NULL
 );
 
+CREATE INDEX IF NOT EXISTS idx_sessions_created_at ON sessions (created_at DESC);
+
 CREATE TABLE IF NOT EXISTS prompts (
     id TEXT PRIMARY KEY,
     version TEXT NOT NULL,
@@ -23,8 +25,8 @@ CREATE TABLE IF NOT EXISTS prompts (
     notes TEXT,
     composes TEXT,
     tested_on TEXT,
-    created_at TEXT,
-    updated_at TEXT
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS evals (

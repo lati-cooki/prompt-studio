@@ -1,6 +1,18 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createSessionsStore, resolveModelKey } from "./sessions.js";
+import { exportToRegistryDraft } from "./sessions.js";
+
+const sampleSession = {
+  name: "My Test Prompt",
+  panes: [
+    {
+      systemPrompt: "You are a helpful assistant.",
+      messages: [{ role: "system", content: "You are a helpful assistant." }],
+      modelKey: "gemma-4-26b",
+    },
+  ],
+};
 
 class FakeStorage {
   constructor(seed = {}) { this.data = { ...seed }; }
@@ -142,4 +154,36 @@ test("resolveModelKey: unknown key returns fallback and warns", async (t) => {
   const out = resolveModelKey("llama-3-local", ["gemma-4-26b"], "gemma-4-26b");
   assert.equal(out, "gemma-4-26b");
   assert.equal(console.warn.mock.callCount(), 1);
+});
+
+test("exportToRegistryDraft: throws on session with no panes", () => {
+  assert.throws(
+    () => exportToRegistryDraft({ name: "empty", panes: [] }),
+    /no panes/,
+  );
+});
+
+test("exportToRegistryDraft: throws on null session", () => {
+  assert.throws(
+    () => exportToRegistryDraft(null),
+    /no panes/,
+  );
+});
+
+test("exportToRegistryDraft: returns draft with id derived from name", () => {
+  const draft = exportToRegistryDraft(sampleSession);
+  assert.equal(draft.id, "my_test_prompt");
+  assert.equal(draft.status, "draft");
+  assert.equal(draft.body, "You are a helpful assistant.");
+  assert.equal(draft.default_model, "gemma-4-26b");
+});
+
+test("exportToRegistryDraft: name with special chars slugifies cleanly", () => {
+  const draft = exportToRegistryDraft({ ...sampleSession, name: "  Hello World!!  " });
+  assert.equal(draft.id, "hello_world");
+});
+
+test("exportToRegistryDraft: empty name falls back to 'draft'", () => {
+  const draft = exportToRegistryDraft({ ...sampleSession, name: "" });
+  assert.equal(draft.id, "draft");
 });

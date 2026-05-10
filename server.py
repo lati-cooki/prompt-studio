@@ -136,6 +136,9 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
 
             cursor.execute("DELETE FROM prompts WHERE id = ?", (prompt_id,))
             conn.commit()
+            if cursor.rowcount == 0:
+                self.send_error(404, "Prompt not found")
+                return
         finally:
             conn.close()
         self.send_json({"status": "success"})
@@ -181,6 +184,9 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 params.append(prompt_id)
                 cursor.execute(query, tuple(params))
                 conn.commit()
+                if cursor.rowcount == 0:
+                    self.send_error(404, "Prompt not found")
+                    return
         finally:
             conn.close()
         self.send_json({"status": "success"})
@@ -213,6 +219,9 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 params.append(session_id)
                 cursor.execute(query, tuple(params))
                 conn.commit()
+                if cursor.rowcount == 0:
+                    self.send_error(404, "Session not found")
+                    return
         finally:
             conn.close()
         self.send_json({"status": "success"})
@@ -224,6 +233,9 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
 
             cursor.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
             conn.commit()
+            if cursor.rowcount == 0:
+                self.send_error(404, "Session not found")
+                return
         finally:
             conn.close()
         self.send_json({"status": "success"})

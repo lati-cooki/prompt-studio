@@ -45,7 +45,10 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         elif self.path in ('/registry', '/registry/'):
             self.serve_file('registry/interface/registry_widget.html', 'text/html')
         else:
-            super().do_GET()
+            self.send_error(404)
+
+    def do_HEAD(self):
+        self.send_error(404)
 
     def serve_file(self, path, content_type):
         try:

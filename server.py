@@ -5,6 +5,7 @@ import sqlite3
 
 DB_PATH = 'prompt_studio.db'
 PORT = 8000
+MAX_BODY_BYTES = 10 * 1024 * 1024  # 10 MB
 
 class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
     def end_headers(self):
@@ -71,9 +72,19 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             self.send_error(404)
 
     def read_json_body(self):
-        content_length = int(self.headers.get('Content-Length', 0))
+        try:
+            content_length = int(self.headers.get('Content-Length', 0))
+        except ValueError:
+            return None
+        if content_length > MAX_BODY_BYTES:
+            self.send_error(413, "Request body too large")
+            return None
         body = self.rfile.read(content_length)
-        return json.loads(body.decode('utf-8'))
+        try:
+            return json.loads(body.decode('utf-8'))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self.send_error(400, "Invalid JSON")
+            return None
 
     def handle_get_sessions(self):
         conn = self.get_db()
@@ -97,6 +108,12 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
 
     def handle_post_sessions(self):
         data = self.read_json_body()
+        if data is None:
+            return
+        required = ("id", "name", "createdAt", "updatedAt", "panes", "vaultConfig")
+        if not all(k in data for k in required):
+            self.send_error(400, "Missing required fields")
+            return
         conn = self.get_db()
         cursor = conn.cursor()
 
@@ -119,6 +136,8 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
 
     def handle_put_prompt(self, prompt_id):
         data = self.read_json_body()
+        if data is None:
+            return
         conn = self.get_db()
         cursor = conn.cursor()
 
@@ -161,6 +180,8 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
 
     def handle_put_session(self, session_id):
         data = self.read_json_body()
+        if data is None:
+            return
         conn = self.get_db()
         cursor = conn.cursor()
 
@@ -199,6 +220,8 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
 
     def handle_post_prompts(self):
         data = self.read_json_body()
+        if data is None:
+            return
         conn = self.get_db()
         cursor = conn.cursor()
 

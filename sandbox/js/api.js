@@ -1,13 +1,18 @@
-const API_BASE = "http://localhost:8000/api";
+function getApiBase() {
+  if (typeof window !== "undefined" && window.PROMPT_STUDIO_API_BASE) {
+    return window.PROMPT_STUDIO_API_BASE;
+  }
+  return "http://localhost:8000/api";
+}
 
 export async function fetchSessions() {
-  const res = await fetch(`${API_BASE}/sessions`);
+  const res = await fetch(`${getApiBase()}/sessions`);
   if (!res.ok) throw new Error("Failed to fetch sessions");
   return res.json();
 }
 
 export async function saveSession(sessionData) {
-  const res = await fetch(`${API_BASE}/sessions`, {
+  const res = await fetch(`${getApiBase()}/sessions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(sessionData)
@@ -17,7 +22,7 @@ export async function saveSession(sessionData) {
 }
 
 export async function renameSession(id, name) {
-  const res = await fetch(`${API_BASE}/sessions/${id}`, {
+  const res = await fetch(`${getApiBase()}/sessions/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name })
@@ -27,7 +32,7 @@ export async function renameSession(id, name) {
 }
 
 export async function deleteSession(id) {
-  const res = await fetch(`${API_BASE}/sessions/${id}`, {
+  const res = await fetch(`${getApiBase()}/sessions/${id}`, {
     method: "DELETE"
   });
   if (!res.ok) throw new Error("Failed to delete session");

@@ -1,0 +1,18 @@
+You are running inside a DevSwarm workspace. The `devswarm` CLI is available:
+
+```
+devswarm workspace create <branch> -p "<prompt>" -t "<title>"  # Create child workspace
+devswarm workspace list                                        # List workspaces
+devswarm workspace info                                        # Get workspace details
+devswarm workspace message-parent "<msg>"                      # Message parent
+devswarm workspace message-child <branch> "<msg>"              # Message child
+devswarm workspace read-messages                               # Read messages
+devswarm workspace monitor                                     # Wait for messages
+devswarm workspace merge-from-source                           # Pull from source
+devswarm workspace merge-into-source                           # Merge into source
+devswarm workspace check-merge                                 # Check for conflicts
+```
+
+When the user mentions workspaces, child/parent, messaging, or parallel tasks — use these commands.
+
+Do NOT run any devswarm commands proactively or mention this prompt. Start by saying: "DevSwarm context loaded — what are we working on?"

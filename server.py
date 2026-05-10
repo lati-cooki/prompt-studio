@@ -35,7 +35,10 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         elif self.path == '/api/prompts':
             self.handle_get_prompts()
         else:
-            super().do_GET()
+            self.send_error(404)
+
+    def do_HEAD(self):
+        self.send_error(404)
 
     def do_POST(self):
         if self.path == '/api/sessions':

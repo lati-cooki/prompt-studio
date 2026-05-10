@@ -176,6 +176,19 @@ test("exportToRegistryDraft: returns draft with id derived from name", () => {
   assert.equal(draft.status, "draft");
   assert.equal(draft.body, "You are a helpful assistant.");
   assert.equal(draft.default_model, "gemma-4-26b");
+  assert.equal(draft.eval_status, "unevaluated");
+  assert.deepEqual(draft.tested_on, ["gemma-4-26b"]);
+  assert.deepEqual(draft.composes, []);
+  assert.equal(draft.file, null);
+  assert.equal(draft.cost_per_run_usd, null);
+  assert.equal(draft.tokens_prompt_body, null);
+});
+
+test("exportToRegistryDraft: tested_on is empty when no modelKey", () => {
+  const session = { ...sampleSession, panes: [{ ...sampleSession.panes[0], modelKey: undefined }] };
+  const draft = exportToRegistryDraft(session);
+  assert.deepEqual(draft.tested_on, []);
+  assert.equal(draft.default_model, null);
 });
 
 test("exportToRegistryDraft: name with special chars slugifies cleanly", () => {

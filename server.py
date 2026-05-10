@@ -40,8 +40,24 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             self.handle_get_sessions()
         elif self.path == '/api/prompts':
             self.handle_get_prompts()
+        elif self.path in ('/', '/sandbox', '/sandbox/'):
+            self.serve_file('sandbox/index.html', 'text/html')
+        elif self.path in ('/registry', '/registry/'):
+            self.serve_file('registry/interface/registry_widget.html', 'text/html')
         else:
             super().do_GET()
+
+    def serve_file(self, path, content_type):
+        try:
+            with open(path, 'rb') as f:
+                data = f.read()
+            self.send_response(200)
+            self.send_header('Content-Type', content_type)
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        except FileNotFoundError:
+            self.send_error(404, f"File not found: {path}")
 
     def do_POST(self):
         if self.path == '/api/sessions':

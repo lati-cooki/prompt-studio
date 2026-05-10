@@ -74,15 +74,21 @@ export function exportToRegistryDraft(session) {
     throw new Error("exportToRegistryDraft: session has no panes");
   }
   const primaryPane = session.panes[0];
-  const draft = {
-    id: session.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || "draft",
-    version: "0.1.0",
-    status: "draft",
-    tier: "audit",
-    owner: "unknown",
-    body: primaryPane.systemPrompt,
-    use_case: "Draft exported from sandbox",
-    default_model: primaryPane.modelKey
+  return {
+    id:                session.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || "draft",
+    version:           "0.1.0",
+    status:            "draft",
+    tier:              "audit",
+    owner:             "unknown",
+    body:              primaryPane.systemPrompt,
+    use_case:          "Draft exported from sandbox",
+    default_model:     primaryPane.modelKey ?? null,
+    cost_per_run_usd:  null,
+    tokens_prompt_body: null,
+    tested_on:         primaryPane.modelKey ? [primaryPane.modelKey] : [],
+    eval_status:       "unevaluated",
+    composes:          [],
+    file:              null,
+    notes:             "",
   };
-  return draft;
 }

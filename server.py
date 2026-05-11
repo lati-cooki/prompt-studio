@@ -87,6 +87,73 @@ def migrate_db(conn):
         raise
 
 
+def migrate_sessions(conn):
+    """Migrate sessions table from the old Flask schema (data TEXT) to the current schema
+    (panes TEXT + vault_config TEXT).  Preserves existing session data."""
+    cursor = conn.cursor()
+    cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='sessions'")
+    row = cursor.fetchone()
+    if not row:
+        return
+    sql = row[0]
+    if 'vault_config' in sql:
+        return  # already on current schema
+    if 'data TEXT' not in sql and 'data' not in sql:
+        return  # unknown schema — leave it alone
+
+    # Read all existing sessions before dropping the table
+    old_rows = conn.execute("SELECT * FROM sessions").fetchall()
+    col_names = [d[0] for d in conn.execute("PRAGMA table_info(sessions)").fetchall()]
+
+    conn.execute("BEGIN")
+    try:
+        conn.execute("DROP TABLE sessions")
+        conn.execute("""
+            CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                panes TEXT NOT NULL,
+                vault_config TEXT NOT NULL
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_created_at ON sessions (created_at DESC)"
+        )
+        for row in old_rows:
+            d = dict(zip(col_names, row))
+            row_id   = str(d.get('id', ''))
+            name     = d.get('name', 'Untitled')
+            created  = str(d.get('created_at') or d.get('createdAt') or '')
+            updated  = str(d.get('updated_at') or d.get('updatedAt') or created)
+            # Old schema stored everything in a 'data' JSON blob
+            raw_data = d.get('data') or d.get('panes') or '[]'
+            try:
+                parsed = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
+            except Exception:
+                parsed = []
+            if isinstance(parsed, dict):
+                vault_cfg = json.dumps(parsed.get('vaultConfig') or parsed.get('vault') or {})
+                panes_val = json.dumps(parsed.get('panes', []))
+            else:
+                vault_cfg = '{}'
+                panes_val = json.dumps(parsed)
+            if not row_id or not created:
+                continue
+            try:
+                conn.execute(
+                    "INSERT OR IGNORE INTO sessions (id, name, created_at, updated_at, panes, vault_config) VALUES (?,?,?,?,?,?)",
+                    (row_id, name, created, updated, panes_val, vault_cfg)
+                )
+            except Exception:
+                pass
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+
 def _seed_prompts_from_index(conn):
     """Import prompts from registry/INDEX.json when the prompts table is empty."""
     cursor = conn.cursor()
@@ -143,6 +210,7 @@ def init_db():
         schema = f.read()
     conn = sqlite3.connect(DB_PATH)
     try:
+        migrate_sessions(conn)
         migrate_db(conn)
         conn.executescript(schema)
         conn.commit()

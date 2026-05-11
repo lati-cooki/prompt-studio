@@ -5,6 +5,11 @@ import socketserver
 import json
 import sqlite3
 
+try:
+    import anthropic
+except ImportError:
+    anthropic = None
+
 DB_PATH = 'prompt_studio.db'
 PORT = 8000
 MAX_BODY_BYTES = 10 * 1024 * 1024  # 10 MB
@@ -141,6 +146,8 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             self.handle_post_sessions()
         elif self.path == '/api/prompts':
             self.handle_post_prompts()
+        elif self.path == '/api/chat':
+            self.handle_post_chat()
         else:
             self.send_error(404)
 
@@ -351,6 +358,57 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         finally:
             conn.close()
         self.send_json({"status": "success"})
+
+    def handle_post_chat(self):
+        data = self.read_json_body()
+        if data is None:
+            return
+        api_key = os.environ.get('ANTHROPIC_API_KEY')
+        if not api_key:
+            self.send_error(503, "ANTHROPIC_API_KEY not configured")
+            return
+        if anthropic is None:
+            self.send_error(503, "anthropic package not installed")
+            return
+
+        model_id = data.get('model', '')
+        messages = data.get('messages', [])
+        system_msgs = [m for m in messages if m.get('role') == 'system']
+        user_msgs   = [m for m in messages if m.get('role') != 'system']
+        system = system_msgs[0]['content'] if system_msgs else ''
+
+        client = anthropic.Anthropic(api_key=api_key)
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/event-stream')
+        self.send_header('Cache-Control', 'no-cache')
+        self.end_headers()
+
+        try:
+            with client.messages.stream(
+                model=model_id,
+                max_tokens=8096,
+                system=system,
+                messages=user_msgs,
+            ) as stream:
+                for text in stream.text_stream:
+                    chunk = json.dumps({"choices": [{"delta": {"content": text}}]})
+                    self.wfile.write(f"data: {chunk}\n\n".encode())
+                    self.wfile.flush()
+                msg = stream.get_final_message()
+                usage_chunk = json.dumps({
+                    "choices": [{"delta": {}}],
+                    "usage": {
+                        "prompt_tokens": msg.usage.input_tokens,
+                        "completion_tokens": msg.usage.output_tokens,
+                    }
+                })
+                self.wfile.write(f"data: {usage_chunk}\n\n".encode())
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
+        except Exception as err:
+            error_chunk = json.dumps({"error": str(err)})
+            self.wfile.write(f"data: {error_chunk}\n\n".encode())
+            self.wfile.flush()
 
     def handle_get_prompts(self):
         conn = self.get_db()

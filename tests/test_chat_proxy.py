@@ -21,14 +21,15 @@ class TestPostChat(unittest.TestCase):
     def test_missing_api_key_returns_503(self):
         handler = _make_handler()
         handler.read_json_body = lambda: {"model": "claude-sonnet-4-6", "messages": [], "stream": True}
-        handler.send_error = MagicMock()
+        handler.send_json = MagicMock()
 
         with patch.dict(os.environ, {}, clear=True):
             handler.handle_post_chat()
 
-        handler.send_error.assert_called_once()
-        args = handler.send_error.call_args[0]
-        self.assertEqual(args[0], 503)
+        handler.send_json.assert_called_once()
+        call_kwargs = handler.send_json.call_args
+        self.assertEqual(call_kwargs.kwargs.get("status") or call_kwargs[1].get("status"), 503)
+        self.assertIn("error", call_kwargs[0][0])
 
     def test_invalid_body_returns_early(self):
         handler = _make_handler()

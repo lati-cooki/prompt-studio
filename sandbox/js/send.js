@@ -47,7 +47,12 @@ async function streamOnePane({ state, pane, model, vaultMessage, vaultResults })
         max_tokens: 4096,
       }),
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+    if (!res.ok) {
+      const text = await res.text();
+      let msg;
+      try { msg = JSON.parse(text).error; } catch { /* not JSON */ }
+      throw new Error(msg ?? `HTTP ${res.status}`);
+    }
 
     const reader  = res.body.getReader();
     const decoder = new TextDecoder();

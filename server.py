@@ -433,15 +433,15 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             return
         api_key = os.environ.get('ANTHROPIC_API_KEY')
         if not api_key:
-            self.send_error(503, "ANTHROPIC_API_KEY not configured")
+            self.send_json({"error": "ANTHROPIC_API_KEY not configured"}, status=503)
             return
         if anthropic is None:
-            self.send_error(503, "anthropic package not installed")
+            self.send_json({"error": "anthropic package not installed"}, status=503)
             return
 
         model_id = data.get('model', '')
         if not model_id:
-            self.send_error(400, "model required")
+            self.send_json({"error": "model required"}, status=400)
             return
         messages = data.get('messages', [])
         system_msgs = [m for m in messages if m.get('role') == 'system']

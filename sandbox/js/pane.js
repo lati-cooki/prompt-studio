@@ -4,7 +4,7 @@ function oneLinePreview(text) {
   return firstLine.slice(0, 77) + "…";
 }
 
-export function createPane({ id, container, initialPrompt, modelKeys = [], initialModelKey = null }) {
+export function createPane({ id, container, initialPrompt, modelKeys = [], initialModelKey = null, registryPrompts = [] }) {
   // ── Section ──────────────────────────────────────────
   const section = document.createElement("section");
   section.className      = "pane";
@@ -23,6 +23,47 @@ export function createPane({ id, container, initialPrompt, modelKeys = [], initi
   promptLabel.textContent = "SYSTEM PROMPT";
 
   labelRow.appendChild(promptLabel);
+
+  if (registryPrompts.length > 0) {
+    const regLabel = document.createElement("span");
+    regLabel.className = "pane-prompt-label";
+    regLabel.style.cssText = "margin-left:auto;margin-right:6px;opacity:0.5;";
+    regLabel.textContent = "Registry:";
+
+    const regSelect = document.createElement("select");
+    regSelect.className = "pane-model-select";
+    regSelect.style.maxWidth = "160px";
+
+    const defaultOpt = document.createElement("option");
+    defaultOpt.value = "";
+    defaultOpt.textContent = "— load prompt —";
+    regSelect.appendChild(defaultOpt);
+
+    for (const p of registryPrompts) {
+      const opt = document.createElement("option");
+      opt.value = p.id;
+      opt.textContent = `${p.id} v${p.version}`;
+      regSelect.appendChild(opt);
+    }
+
+    regSelect.addEventListener("change", () => {
+      const selected = registryPrompts.find(p => p.id === regSelect.value);
+      if (!selected) return;
+      let body = selected.body || "";
+      // strip YAML frontmatter if present
+      if (body.startsWith("---")) {
+        const end = body.indexOf("---", 3);
+        if (end !== -1) body = body.slice(end + 3).trim();
+      }
+      textarea.value = body;
+      refreshPreview();
+      applyReset.click();
+      regSelect.value = "";
+    });
+
+    labelRow.appendChild(regLabel);
+    labelRow.appendChild(regSelect);
+  }
 
   // Meta row (badge + model select + spacer + meter slot)
   const metaRow = document.createElement("div");

@@ -23,32 +23,48 @@ def migrate_db(conn):
     if 'PRIMARY KEY (id, version)' in row[0]:
         return  # already migrated
     # Recreate table with composite PK
-    cursor.executescript("""
-        CREATE TABLE prompts_new (
-            id TEXT NOT NULL,
-            version TEXT NOT NULL,
-            status TEXT,
-            tier TEXT,
-            owner TEXT,
-            body TEXT,
-            use_case TEXT,
-            cost_per_run_usd REAL,
-            tokens_prompt_body INTEGER,
-            default_model TEXT,
-            eval_status TEXT,
-            file TEXT,
-            notes TEXT,
-            composes TEXT,
-            tested_on TEXT,
-            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
-            PRIMARY KEY (id, version)
-        );
-        INSERT INTO prompts_new SELECT * FROM prompts;
-        DROP TABLE prompts;
-        ALTER TABLE prompts_new RENAME TO prompts;
-    """)
-    conn.commit()
+    conn.execute("BEGIN")
+    try:
+        conn.execute("""
+            CREATE TABLE prompts_new (
+                id TEXT NOT NULL,
+                version TEXT NOT NULL,
+                status TEXT,
+                tier TEXT,
+                owner TEXT,
+                body TEXT,
+                use_case TEXT,
+                cost_per_run_usd REAL,
+                tokens_prompt_body INTEGER,
+                default_model TEXT,
+                eval_status TEXT,
+                file TEXT,
+                notes TEXT,
+                composes TEXT,
+                tested_on TEXT,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+                PRIMARY KEY (id, version)
+            )
+        """)
+        conn.execute("""
+            INSERT INTO prompts_new (
+                id, version, status, tier, owner, body, use_case,
+                cost_per_run_usd, tokens_prompt_body, default_model, eval_status,
+                file, notes, composes, tested_on, created_at, updated_at
+            )
+            SELECT
+                id, version, status, tier, owner, body, use_case,
+                cost_per_run_usd, tokens_prompt_body, default_model, eval_status,
+                file, notes, composes, tested_on, created_at, updated_at
+            FROM prompts
+        """)
+        conn.execute("DROP TABLE prompts")
+        conn.execute("ALTER TABLE prompts_new RENAME TO prompts")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def init_db():
@@ -211,6 +227,7 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         try:
             cursor = conn.cursor()
 
+            # Deletes all versions of this prompt ID intentionally
             cursor.execute("DELETE FROM prompts WHERE id = ?", (prompt_id,))
             conn.commit()
             if cursor.rowcount == 0:
@@ -225,7 +242,7 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         if data is None:
             return
         version = data.get('version')
-        if not version:
+        if version is None:
             self.send_error(400, "version required")
             return
         conn = self.get_db()

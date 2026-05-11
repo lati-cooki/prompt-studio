@@ -11,11 +11,52 @@ MAX_BODY_BYTES = 10 * 1024 * 1024  # 10 MB
 SCHEMA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schema.sql')
 
 
+def migrate_db(conn):
+    """Migrate prompts table to composite (id, version) primary key if needed."""
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='prompts'"
+    )
+    row = cursor.fetchone()
+    if not row:
+        return  # table doesn't exist yet; schema.sql will create it
+    if 'PRIMARY KEY (id, version)' in row[0]:
+        return  # already migrated
+    # Recreate table with composite PK
+    cursor.executescript("""
+        CREATE TABLE prompts_new (
+            id TEXT NOT NULL,
+            version TEXT NOT NULL,
+            status TEXT,
+            tier TEXT,
+            owner TEXT,
+            body TEXT,
+            use_case TEXT,
+            cost_per_run_usd REAL,
+            tokens_prompt_body INTEGER,
+            default_model TEXT,
+            eval_status TEXT,
+            file TEXT,
+            notes TEXT,
+            composes TEXT,
+            tested_on TEXT,
+            created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+            updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+            PRIMARY KEY (id, version)
+        );
+        INSERT INTO prompts_new SELECT * FROM prompts;
+        DROP TABLE prompts;
+        ALTER TABLE prompts_new RENAME TO prompts;
+    """)
+    conn.commit()
+
+
 def init_db():
     with open(SCHEMA_PATH) as f:
         schema = f.read()
     conn = sqlite3.connect(DB_PATH)
     try:
+        migrate_db(conn)
         conn.executescript(schema)
         conn.commit()
     finally:
@@ -183,46 +224,34 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         data = self.read_json_body()
         if data is None:
             return
+        version = data.get('version')
+        if not version:
+            self.send_error(400, "version required")
+            return
         conn = self.get_db()
         try:
             cursor = conn.cursor()
-
-            mapping = {
-                "version": "version",
-                "status": "status",
-                "tier": "tier",
-                "owner": "owner",
-                "body": "body",
-                "useCase": "use_case",
-                "costPerRunUsd": "cost_per_run_usd",
-                "tokensPromptBody": "tokens_prompt_body",
-                "defaultModel": "default_model",
-                "evalStatus": "eval_status",
-                "file": "file",
-                "notes": "notes",
-                "composes": "composes",
-                "testedOn": "tested_on",
-                "updatedAt": "updated_at"
-            }
-
-            fields = []
-            params = []
-            for json_key, db_col in mapping.items():
-                if json_key in data:
-                    fields.append(f"{db_col} = ?")
-                    val = data[json_key]
-                    if json_key in ["composes", "testedOn"]:
-                        val = json.dumps(val)
-                    params.append(val)
-
-            if fields:
-                query = f"UPDATE prompts SET {', '.join(fields)} WHERE id = ?"
-                params.append(prompt_id)
-                cursor.execute(query, tuple(params))
-                conn.commit()
-                if cursor.rowcount == 0:
-                    self.send_error(404, "Prompt not found")
-                    return
+            cursor.execute(
+                """UPDATE prompts SET
+                   status=?, tier=?, owner=?, body=?, use_case=?,
+                   cost_per_run_usd=?, tokens_prompt_body=?, default_model=?,
+                   eval_status=?, file=?, notes=?, composes=?, tested_on=?,
+                   updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
+                   WHERE id=? AND version=?""",
+                (
+                    data.get('status'), data.get('tier'), data.get('owner'),
+                    data.get('body'), data.get('use_case'),
+                    data.get('cost_per_run_usd'), data.get('tokens_prompt_body'),
+                    data.get('default_model'), data.get('eval_status'),
+                    data.get('file'), data.get('notes'),
+                    data.get('composes'), data.get('tested_on'),
+                    prompt_id, version,
+                )
+            )
+            conn.commit()
+            if cursor.rowcount == 0:
+                self.send_error(404, "Prompt not found")
+                return
         finally:
             conn.close()
         self.send_json({"status": "success"})

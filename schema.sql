@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE INDEX IF NOT EXISTS idx_sessions_created_at ON sessions (created_at DESC);
 
 CREATE TABLE IF NOT EXISTS prompts (
-    id TEXT PRIMARY KEY,
+    id TEXT NOT NULL,
     version TEXT NOT NULL,
     status TEXT,
     tier TEXT,
@@ -25,8 +25,9 @@ CREATE TABLE IF NOT EXISTS prompts (
     notes TEXT,
     composes TEXT,
     tested_on TEXT,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+    PRIMARY KEY (id, version)
 );
 
 CREATE TABLE IF NOT EXISTS evals (

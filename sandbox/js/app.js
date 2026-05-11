@@ -7,6 +7,7 @@ import { renderSaveSlot, renderSessionList }    from "./session-rail.js";
 import { buildMarkdown, triggerMarkdownDownload, slugify } from "./export.js";
 import { createSessionsStore, resolveModelKey, exportToRegistryDraft } from "./sessions.js";
 import { createMeter }                          from "./meter.js";
+import { fetchPrompts, fetchPromptBody }        from "./api.js";
 
 const paneContainer = document.getElementById("pane-container");
 const stateA = createPaneState(DEFAULT_SYSTEM_PROMPT);
@@ -38,6 +39,51 @@ paneA.applyReset.addEventListener("click", () => {
 let meterA = null;
 let meterB = null;
 
+// ── Registry prompt dropdown ─────────────────────────────
+let _cachedPrompts = null;
+
+async function getRegistryPrompts() {
+  if (_cachedPrompts) return _cachedPrompts;
+  try {
+    _cachedPrompts = await fetchPrompts();
+  } catch {
+    _cachedPrompts = [];
+  }
+  return _cachedPrompts;
+}
+
+async function attachRegistrySelect(pane) {
+  const prompts = await getRegistryPrompts();
+  if (!prompts.length) return;
+
+  for (const p of prompts) {
+    if (!p.id || !p.version) continue;
+    const opt = document.createElement("option");
+    opt.value       = JSON.stringify({ id: p.id, version: p.version, body: p.body || null });
+    opt.textContent = `${p.id}@${p.version}`;
+    pane.registrySelect.appendChild(opt);
+  }
+
+  pane.registrySelect.addEventListener("change", async () => {
+    const raw = pane.registrySelect.value;
+    if (!raw) return;
+    let parsed;
+    try { parsed = JSON.parse(raw); } catch { return; }
+
+    let body = parsed.body;
+    if (!body) {
+      try { body = await fetchPromptBody(parsed.id); } catch { /* leave empty */ }
+    }
+
+    if (body) {
+      pane.textarea.value = body;
+      pane.refreshPreview();
+    }
+
+    pane.registrySelect.value = "";
+  });
+}
+
 function attachMeter(pane, state, modelKey) {
   const meter = createMeter({
     pane,
@@ -66,6 +112,7 @@ const $vaultHealth  = document.getElementById("vault-health");
 let activeSessionId = null;
 
 meterA = attachMeter(paneA, stateA, modelKeyA);
+attachRegistrySelect(paneA);
 
 paneA.onModelChange((newKey) => {
   modelKeyA = newKey;
@@ -204,6 +251,7 @@ function enterCompare() {
   $composerLabel.textContent = "both ⇢";
 
   meterB = attachMeter(paneB, stateB, modelKeyB);
+  attachRegistrySelect(paneB);
   paneB.onModelChange((newKey) => {
     modelKeyB = newKey;
     meterB.updateContextWindow(MODELS[newKey].contextWindow);

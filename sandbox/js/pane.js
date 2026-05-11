@@ -74,10 +74,20 @@ export function createPane({ id, container, initialPrompt, modelKeys = [], initi
   textarea.spellcheck = false;
   textarea.value      = initialPrompt;
 
+  const registrySelect = document.createElement("select");
+  registrySelect.className = "pane-registry-select";
+  const registryPlaceholder = document.createElement("option");
+  registryPlaceholder.value       = "";
+  registryPlaceholder.textContent = "— load from registry —";
+  registryPlaceholder.disabled    = true;
+  registryPlaceholder.selected    = true;
+  registrySelect.appendChild(registryPlaceholder);
+
   const applyReset = document.createElement("button");
   applyReset.className   = "pane-apply-reset";
   applyReset.textContent = "Apply & Reset";
 
+  expandedArea.appendChild(registrySelect);
   expandedArea.appendChild(textarea);
   expandedArea.appendChild(applyReset);
 
@@ -195,6 +205,7 @@ export function createPane({ id, container, initialPrompt, modelKeys = [], initi
     log,
     refreshPreview,
     modelSelect,
+    registrySelect,
 
     setModelKey(key) {
       modelSelect.value = key;

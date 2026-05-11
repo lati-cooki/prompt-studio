@@ -381,6 +381,16 @@ body::after {
 .compare .pane[data-pane-id="B"] .pane-prompt-textarea { border-left-color: var(--plum); }
 .compare .pane[data-pane-id="B"] .pane-prompt-textarea:focus { border-color: var(--plum); }
 
+.pane-registry-select {
+  width: 100%; background: var(--paper-2); color: var(--ink-3);
+  border: 1px solid var(--line-2); outline: none; cursor: pointer;
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.02em;
+  padding: 5px 8px; appearance: none; -webkit-appearance: none;
+  transition: border-color 0.1s, color 0.1s;
+}
+.pane-registry-select:focus { border-color: var(--teal); color: var(--ink-2); }
+.pane-registry-select:disabled { opacity: 0.4; cursor: default; }
+
 .pane-apply-reset {
   align-self: flex-end;
   background: var(--ink); color: var(--paper); border: none;

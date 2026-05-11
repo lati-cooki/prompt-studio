@@ -72,3 +72,9 @@ export async function deletePrompt(id) {
   if (!res.ok) throw new Error("Failed to delete prompt");
   return res.json();
 }
+
+export async function fetchPromptBody(id) {
+  const res = await fetch(`${getApiBase()}/prompts/${encodeURIComponent(id)}/body`);
+  if (!res.ok) throw new Error(`Failed to fetch body for prompt '${id}'`);
+  return (await res.json()).body;
+}

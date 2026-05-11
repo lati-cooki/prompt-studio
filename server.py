@@ -254,7 +254,7 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         elif self.path == '/api/prompts':
             self.handle_get_prompts()
         elif self.path in ('/', '/sandbox', '/sandbox/'):
-            self.serve_file('sandbox/index.html', 'text/html')
+            self.serve_sandbox_index()
         elif self.path in ('/registry', '/registry/'):
             self.serve_file('registry/interface/registry_widget.html', 'text/html')
         elif self.path.startswith('/js/'):
@@ -264,6 +264,23 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_HEAD(self):
         self.send_error(404)
+
+    def serve_sandbox_index(self):
+        """Serve index.html with LM_STUDIO_URL injected from environment."""
+        try:
+            with open('sandbox/index.html', 'rb') as f:
+                data = f.read()
+            lm_url = os.environ.get('LM_STUDIO_URL', '')
+            if lm_url:
+                inject = f'<script>window.LM_STUDIO_URL="{lm_url}";</script>'.encode()
+                data = data.replace(b'<script type="module"', inject + b'<script type="module"', 1)
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html')
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        except FileNotFoundError:
+            self.send_error(404)
 
     def serve_file(self, path, content_type=None):
         try:

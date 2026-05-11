@@ -1,6 +1,10 @@
 // LM Studio serves all local models on a single endpoint.
 // Models are discovered at runtime via GET /v1/models.
-export const LM_STUDIO_URL = "http://localhost:1234";
+// Override by setting window.LM_STUDIO_URL before this module loads,
+// or set LM_STUDIO_URL in .env (server injects it as a <script> tag).
+export const LM_STUDIO_URL =
+  (typeof window !== "undefined" && window.LM_STUDIO_URL) ||
+  "http://192.168.128.75:1234";
 
 export const FRONTIER_MODELS = {
   // Anthropic

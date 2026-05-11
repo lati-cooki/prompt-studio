@@ -144,6 +144,14 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
     def do_POST(self):
         if self.path == '/api/sessions':
             self.handle_post_sessions()
+        elif self.path.startswith('/api/prompts/'):
+            parts = self.path.removeprefix('/api/prompts/').split('/')
+            if len(parts) == 2 and parts[1] == 'draft':
+                self.handle_post_prompt_draft(parts[0])
+            elif len(parts) == 3 and parts[2] == 'validate':
+                self.handle_post_prompt_validate(parts[0], parts[1])
+            else:
+                self.send_error(404)
         elif self.path == '/api/prompts':
             self.handle_post_prompts()
         elif self.path == '/api/chat':
@@ -358,6 +366,55 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         finally:
             conn.close()
         self.send_json({"status": "success"})
+
+    def handle_post_prompt_draft(self, prompt_id):
+        data = self.read_json_body()
+        if data is None:
+            return
+        body = data.get('body', '')
+        conn = self.get_db()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT version FROM prompts WHERE id=? ORDER BY version DESC",
+                (prompt_id,)
+            )
+            rows = cursor.fetchall()
+            if rows:
+                parts = rows[0][0].split('.')
+                new_version = f"{parts[0]}.{int(parts[1]) + 1}.0"
+            else:
+                new_version = "1.0.0"
+            cursor.execute(
+                """INSERT INTO prompts (id, version, status, body,
+                   created_at, updated_at)
+                   VALUES (?, ?, 'draft', ?,
+                   strftime('%Y-%m-%dT%H:%M:%SZ','now'),
+                   strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+                   ON CONFLICT(id, version) DO UPDATE SET
+                   body=excluded.body,
+                   updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')""",
+                (prompt_id, new_version, body)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        self.send_json({"status": "draft", "id": prompt_id, "version": new_version})
+
+    def handle_post_prompt_validate(self, prompt_id, version):
+        conn = self.get_db()
+        cursor = conn.cursor()
+        cursor.execute(
+            """UPDATE prompts SET status='production', eval_status='validated',
+               updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
+               WHERE id=? AND version=?""",
+            (prompt_id, version)
+        )
+        conn.commit()
+        if cursor.rowcount == 0:
+            self.send_error(404, "Prompt not found")
+            return
+        self.send_json({"status": "validated", "id": prompt_id, "version": version})
 
     def handle_post_chat(self):
         data = self.read_json_body()

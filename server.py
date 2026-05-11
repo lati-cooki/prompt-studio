@@ -1,5 +1,6 @@
 import http.server
 import mimetypes
+import os
 import socketserver
 import json
 import sqlite3
@@ -7,6 +8,18 @@ import sqlite3
 DB_PATH = 'prompt_studio.db'
 PORT = 8000
 MAX_BODY_BYTES = 10 * 1024 * 1024  # 10 MB
+SCHEMA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schema.sql')
+
+
+def init_db():
+    with open(SCHEMA_PATH) as f:
+        schema = f.read()
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        conn.executescript(schema)
+        conn.commit()
+    finally:
+        conn.close()
 
 class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
     def end_headers(self):
@@ -327,6 +340,7 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         self.send_raw_json(result if result else "[]")
 
 if __name__ == '__main__':
+    init_db()
     with socketserver.TCPServer(("", PORT), PromptStudioHandler) as httpd:
         print(f"Serving at port {PORT}")
         httpd.serve_forever()

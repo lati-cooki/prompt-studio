@@ -372,10 +372,13 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             return
 
         model_id = data.get('model', '')
+        if not model_id:
+            self.send_error(400, "model required")
+            return
         messages = data.get('messages', [])
         system_msgs = [m for m in messages if m.get('role') == 'system']
         user_msgs   = [m for m in messages if m.get('role') != 'system']
-        system = system_msgs[0]['content'] if system_msgs else ''
+        system = "\n\n".join(m['content'] for m in system_msgs) if system_msgs else ''
 
         client = anthropic.Anthropic(api_key=api_key)
         self.send_response(200)
@@ -408,6 +411,7 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as err:
             error_chunk = json.dumps({"error": str(err)})
             self.wfile.write(f"data: {error_chunk}\n\n".encode())
+            self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
 
     def handle_get_prompts(self):

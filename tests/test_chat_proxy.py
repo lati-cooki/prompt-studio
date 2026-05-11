@@ -24,8 +24,6 @@ class TestPostChat(unittest.TestCase):
         handler.send_error = MagicMock()
 
         with patch.dict(os.environ, {}, clear=True):
-            if "ANTHROPIC_API_KEY" in os.environ:
-                del os.environ["ANTHROPIC_API_KEY"]
             handler.handle_post_chat()
 
         handler.send_error.assert_called_once()

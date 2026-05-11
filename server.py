@@ -5,13 +5,28 @@ import socketserver
 import json
 import sqlite3
 
+def _load_dotenv(path=".env"):
+    """Load key=value pairs from .env into os.environ (no-op if file absent)."""
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, val = line.partition("=")
+                os.environ.setdefault(key.strip(), val.strip())
+    except FileNotFoundError:
+        pass
+
+_load_dotenv()
+
 try:
     import anthropic
 except ImportError:
     anthropic = None
 
-DB_PATH = 'prompt_studio.db'
-PORT = 8000
+DB_PATH = os.environ.get("DB_PATH", "prompt_studio.db")
+PORT = int(os.environ.get("PORT", 8000))
 MAX_BODY_BYTES = 10 * 1024 * 1024  # 10 MB
 SCHEMA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schema.sql')
 

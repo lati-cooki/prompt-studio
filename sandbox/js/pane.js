@@ -24,46 +24,54 @@ export function createPane({ id, container, initialPrompt, modelKeys = [], initi
 
   labelRow.appendChild(promptLabel);
 
-  if (registryPrompts.length > 0) {
-    const regLabel = document.createElement("span");
-    regLabel.className = "pane-prompt-label";
-    regLabel.style.cssText = "margin-left:auto;margin-right:6px;opacity:0.5;";
-    regLabel.textContent = "Registry:";
+  const regLabel = document.createElement("span");
+  regLabel.className = "pane-prompt-label";
+  regLabel.style.cssText = "margin-left:auto;margin-right:6px;opacity:0.5;";
+  regLabel.textContent = "Registry:";
+  regLabel.hidden = true;
 
-    const regSelect = document.createElement("select");
-    regSelect.className = "pane-model-select";
-    regSelect.style.maxWidth = "160px";
+  let _prompts = [...registryPrompts];
 
+  const regSelect = document.createElement("select");
+  regSelect.className = "pane-model-select";
+  regSelect.style.maxWidth = "160px";
+  regSelect.hidden = true;
+
+  function buildRegOptions() {
+    regSelect.innerHTML = "";
     const defaultOpt = document.createElement("option");
     defaultOpt.value = "";
     defaultOpt.textContent = "— load prompt —";
     regSelect.appendChild(defaultOpt);
-
-    for (const p of registryPrompts) {
+    for (const p of _prompts) {
       const opt = document.createElement("option");
       opt.value = p.id;
       opt.textContent = `${p.id} v${p.version}`;
       regSelect.appendChild(opt);
     }
-
-    regSelect.addEventListener("change", () => {
-      const selected = registryPrompts.find(p => p.id === regSelect.value);
-      if (!selected) return;
-      let body = selected.body || "";
-      // strip YAML frontmatter if present
-      if (body.startsWith("---")) {
-        const end = body.indexOf("---", 3);
-        if (end !== -1) body = body.slice(end + 3).trim();
-      }
-      textarea.value = body;
-      refreshPreview();
-      applyReset.click();
-      regSelect.value = "";
-    });
-
-    labelRow.appendChild(regLabel);
-    labelRow.appendChild(regSelect);
+    const hasPrompts = _prompts.length > 0;
+    regLabel.hidden = !hasPrompts;
+    regSelect.hidden = !hasPrompts;
   }
+
+  buildRegOptions();
+
+  regSelect.addEventListener("change", () => {
+    const selected = _prompts.find(p => p.id === regSelect.value);
+    if (!selected) return;
+    let body = selected.body || "";
+    if (body.startsWith("---")) {
+      const end = body.indexOf("---", 3);
+      if (end !== -1) body = body.slice(end + 3).trim();
+    }
+    textarea.value = body;
+    refreshPreview();
+    applyReset.click();
+    regSelect.value = "";
+  });
+
+  labelRow.appendChild(regLabel);
+  labelRow.appendChild(regSelect);
 
   // Meta row (badge + model select + spacer + meter slot)
   const metaRow = document.createElement("div");
@@ -239,6 +247,11 @@ export function createPane({ id, container, initialPrompt, modelKeys = [], initi
 
     setModelKey(key) {
       modelSelect.value = key;
+    },
+
+    setRegistryPrompts(prompts) {
+      _prompts = prompts;
+      buildRegOptions();
     },
 
     onModelChange(fn) {

@@ -21,7 +21,10 @@ let registryPrompts = [];
 async function loadRegistryPrompts() {
   try {
     const res = await fetch("/api/prompts");
-    if (res.ok) registryPrompts = await res.json();
+    if (!res.ok) return;
+    registryPrompts = await res.json();
+    paneA.setRegistryPrompts(registryPrompts);
+    paneB?.setRegistryPrompts(registryPrompts);
   } catch { /* server may not be running — degrade gracefully */ }
 }
 

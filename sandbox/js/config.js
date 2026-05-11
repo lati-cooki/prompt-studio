@@ -3,25 +3,45 @@ export const MODELS = {
     id:            "mlx-community/gemma-4-26B-A4B-it-4bit",
     endpoint:      "http://localhost:8080/v1/chat/completions",
     contextWindow: 128000,
+    group:         "local",
   },
   "qwen3-4b": {
     id:            "mlx-community/Qwen3-4B-Instruct-2507-4bit",
     endpoint:      "http://localhost:8091/v1/chat/completions",
     contextWindow: 262144,
+    group:         "local",
   },
   "qwen3-27b": {
     id:            "Jackrong/MLX-Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-v2-4bit",
     endpoint:      "http://localhost:8092/v1/chat/completions",
     contextWindow: 262144,
+    group:         "local",
   },
 };
 
-export const DEFAULT_MODEL_KEY = "gemma-4-26b";
+export const FRONTIER_MODELS = {
+  "claude-haiku-4-5": {
+    id:            "claude-haiku-4-5-20251001",
+    endpoint:      "/api/chat",
+    contextWindow: 200000,
+    group:         "frontier",
+  },
+  "claude-sonnet-4-6": {
+    id:            "claude-sonnet-4-6",
+    endpoint:      "/api/chat",
+    contextWindow: 200000,
+    group:         "frontier",
+  },
+};
+
+export const ALL_MODELS = { ...MODELS, ...FRONTIER_MODELS };
+
+export const DEFAULT_MODEL_KEY = "qwen3-4b";
 
 export function getActiveModelKey() {
   try {
     const saved = localStorage.getItem("promptSandbox.modelKey");
-    if (saved && Object.prototype.hasOwnProperty.call(MODELS, saved)) {
+    if (saved && Object.prototype.hasOwnProperty.call(ALL_MODELS, saved)) {
       return saved;
     }
     return DEFAULT_MODEL_KEY;

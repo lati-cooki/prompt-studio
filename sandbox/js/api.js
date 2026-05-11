@@ -72,3 +72,23 @@ export async function deletePrompt(id) {
   if (!res.ok) throw new Error("Failed to delete prompt");
   return res.json();
 }
+
+export async function saveDraftPrompt(id, body) {
+  const res = await fetch(`${getApiBase()}/prompts/${id}/draft`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ body }),
+  });
+  if (!res.ok) throw new Error("Failed to save draft");
+  return res.json();
+}
+
+export async function validatePrompt(id, version) {
+  const res = await fetch(`${getApiBase()}/prompts/${id}/${version}/validate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  if (!res.ok) throw new Error("Failed to validate prompt");
+  return res.json();
+}

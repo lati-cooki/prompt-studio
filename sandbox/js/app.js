@@ -16,12 +16,22 @@ let   paneB  = null;
 let modelKeyA = getActiveModelKey();
 let modelKeyB = null;
 
+let registryPrompts = [];
+
+async function loadRegistryPrompts() {
+  try {
+    const res = await fetch("/api/prompts");
+    if (res.ok) registryPrompts = await res.json();
+  } catch { /* server may not be running — degrade gracefully */ }
+}
+
 const paneA = createPane({
   id:              "A",
   container:       paneContainer,
   initialPrompt:   DEFAULT_SYSTEM_PROMPT,
   modelKeys:       Object.keys(MODELS),
   initialModelKey: modelKeyA,
+  registryPrompts,
 });
 
 const activePanes = () => paneB
@@ -190,6 +200,7 @@ function enterCompare() {
     initialPrompt:   DEFAULT_SYSTEM_PROMPT,
     modelKeys:       Object.keys(MODELS),
     initialModelKey: modelKeyB,
+    registryPrompts,
   });
   paneB.applyReset.addEventListener("click", () => {
     stateB.applyPrompt(paneB.textarea.value);
@@ -396,6 +407,7 @@ $exportBtn.addEventListener("click", () => {
   });
 });
 
+loadRegistryPrompts();
 refreshSessionList();
 
 // ── Keyboard shortcuts ───────────────────────────────────

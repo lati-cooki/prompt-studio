@@ -2,7 +2,7 @@ import { createPaneState }     from "./state.js";
 import { createPane }          from "./pane.js";
 import { sendToPanes }         from "./send.js";
 import { pingVaultHealth, reindexVault } from "./vault.js";
-import { ALL_MODELS, getActiveModelKey } from "./config.js";
+import { ALL_MODELS, FRONTIER_MODELS, LM_STUDIO_URL, getActiveModelKey } from "./config.js";
 import { renderSaveSlot, renderSessionList } from "./session-rail.js";
 import { buildMarkdown, triggerMarkdownDownload, slugify } from "./export.js";
 import { createSessionsStore, resolveSession } from "./sessions.js";
@@ -17,6 +17,9 @@ let activePrompt      = null;
 let activePaneMap     = {};   // modelKey → { state, pane, meter }
 let activeSessionId   = null;
 let selectedModelKeys = new Set([getActiveModelKey()]);
+
+// Live model registry — starts with frontier, locals added after LM Studio query
+const liveModels = { ...FRONTIER_MODELS };
 
 const sessionsStore = createSessionsStore();
 
@@ -63,15 +66,40 @@ const registryPanel = createRegistryPanel({
 });
 
 // ── Model selector ─────────────────────────────────────
-createModelSelector({
-  container:   $modelChecklist,
-  models:      ALL_MODELS,
-  initialKeys: [getActiveModelKey()],
-  onChange(keys) {
-    selectedModelKeys = keys;
-    syncPanes();
-  },
-});
+function buildModelSelector(initialKeys) {
+  $modelChecklist.innerHTML = "";
+  createModelSelector({
+    container:   $modelChecklist,
+    models:      liveModels,
+    initialKeys: initialKeys ?? [...selectedModelKeys],
+    onChange(keys) {
+      selectedModelKeys = keys;
+      syncPanes();
+    },
+  });
+}
+
+async function loadLMStudioModels() {
+  try {
+    const ctl   = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 2000);
+    const res   = await fetch(`${LM_STUDIO_URL}/v1/models`, { signal: ctl.signal });
+    clearTimeout(timer);
+    if (!res.ok) return;
+    const { data = [] } = await res.json();
+    for (const m of data) {
+      liveModels[m.id] = {
+        id:            m.id,
+        endpoint:      `${LM_STUDIO_URL}/v1/chat/completions`,
+        contextWindow: m.context_length || 32768,
+        group:         "local",
+        provider:      "lmstudio",
+      };
+      // Keep ALL_MODELS in sync so pane creation can look up contextWindow
+      ALL_MODELS[m.id] = liveModels[m.id];
+    }
+  } catch { /* LM Studio not running — degrade gracefully */ }
+}
 
 // ── Pane management ─────────────────────────────────────
 function getSystemPromptBody() {
@@ -96,7 +124,7 @@ function createOrUpdatePane(modelKey) {
   const meter = createMeter({
     pane,
     state,
-    contextWindow: ALL_MODELS[modelKey].contextWindow,
+    contextWindow: liveModels[modelKey]?.contextWindow ?? 32768,
     getDraftText:  () => $input.value,
   });
   pane.onUsage = (usage) => {
@@ -127,7 +155,7 @@ function activePanes() {
   return Object.entries(activePaneMap).map(([modelKey, { state, pane }]) => ({
     state,
     pane,
-    model: ALL_MODELS[modelKey],
+    model: liveModels[modelKey],
   }));
 }
 
@@ -359,16 +387,10 @@ function loadEntry(entry) {
   const { promptRef, models, panes, vaultConfig } = resolveSession(entry);
 
   if (models.length) {
-    const valid = models.filter(k => ALL_MODELS[k]);
+    const valid = models.filter(k => liveModels[k]);
     if (valid.length) {
       selectedModelKeys = new Set(valid);
-      $modelChecklist.innerHTML = "";
-      createModelSelector({
-        container:   $modelChecklist,
-        models:      ALL_MODELS,
-        initialKeys: [...selectedModelKeys],
-        onChange(keys) { selectedModelKeys = keys; syncPanes(); },
-      });
+      buildModelSelector([...selectedModelKeys]);
       syncPanes();
     }
   }
@@ -487,7 +509,12 @@ document.addEventListener("keydown", (e) => {
 });
 
 // ── Boot ─────────────────────────────────────────────────
-switchTab("eval");
-syncPanes();
-loadRegistryPrompts();
-refreshSessionList();
+async function init() {
+  switchTab("eval");
+  await loadLMStudioModels();   // discover local models (2s timeout, non-blocking)
+  buildModelSelector();         // build checklist with discovered models + frontier
+  syncPanes();
+  loadRegistryPrompts();
+  refreshSessionList();
+}
+init();

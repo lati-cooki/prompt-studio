@@ -1,26 +1,6 @@
-export const MODELS = {
-  "gemma-4-26b": {
-    id:            "mlx-community/gemma-4-26B-A4B-it-4bit",
-    endpoint:      "http://localhost:8080/v1/chat/completions",
-    contextWindow: 128000,
-    group:         "local",
-    provider:      "local",
-  },
-  "qwen3-4b": {
-    id:            "mlx-community/Qwen3-4B-Instruct-2507-4bit",
-    endpoint:      "http://localhost:8091/v1/chat/completions",
-    contextWindow: 262144,
-    group:         "local",
-    provider:      "local",
-  },
-  "qwen3-27b": {
-    id:            "Jackrong/MLX-Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-v2-4bit",
-    endpoint:      "http://localhost:8092/v1/chat/completions",
-    contextWindow: 262144,
-    group:         "local",
-    provider:      "local",
-  },
-};
+// LM Studio serves all local models on a single endpoint.
+// Models are discovered at runtime via GET /v1/models.
+export const LM_STUDIO_URL = "http://localhost:1234";
 
 export const FRONTIER_MODELS = {
   // Anthropic
@@ -78,9 +58,11 @@ export const FRONTIER_MODELS = {
   },
 };
 
-export const ALL_MODELS = { ...MODELS, ...FRONTIER_MODELS };
+// ALL_MODELS starts frontier-only; local models are added at runtime by app.js
+// after querying LM Studio's /v1/models endpoint.
+export const ALL_MODELS = { ...FRONTIER_MODELS };
 
-export const DEFAULT_MODEL_KEY = "qwen3-4b";
+export const DEFAULT_MODEL_KEY = "claude-sonnet-4-6";
 
 export function getActiveModelKey() {
   try {

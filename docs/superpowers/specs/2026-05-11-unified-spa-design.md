@@ -214,6 +214,18 @@ Frontier models route through `/api/chat` instead of directly to a local endpoin
 
 ---
 
+## Visual Design
+
+The unified SPA inherits the existing **Consensus Protocol design language** from `sandbox/index.html` exactly as-is:
+
+- Palette: `--paper` (#f6f3ec cream), `--ink` (#0c0f14), `--ink-2/3/4` grays, `--amber`, `--green`, `--red`, `--teal`, `--plum`
+- Fonts: Inter Tight (sans), JetBrains Mono (mono), Newsreader (serif)
+- Existing component styles (rail, pane, bubble, composer, session-rail) are reused; new components (model checklist, registry panel) follow the same token conventions
+
+No new CSS framework, no design system change. The brainstorming mockup used a dark theme for contrast only — the built UI is light/paper.
+
+---
+
 ## What Is Not Changing
 
 - `server.py` transport (stdlib http.server, no Flask)

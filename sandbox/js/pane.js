@@ -4,76 +4,22 @@ function oneLinePreview(text) {
   return firstLine.slice(0, 77) + "…";
 }
 
-export function createPane({ id, container, initialPrompt, modelKeys = [], initialModelKey = null, registryPrompts = [] }) {
-  // ── Section ──────────────────────────────────────────
+export function createPane({ id, container, initialPrompt = "", modelKeys = [], initialModelKey = null }) {
   const section = document.createElement("section");
   section.className      = "pane";
   section.dataset.paneId = id;
 
-  // ── Prompt header ────────────────────────────────────
   const header = document.createElement("header");
   header.className = "pane-prompt";
 
-  // Label row (single-mode only — compare hides it via CSS)
   const labelRow = document.createElement("div");
   labelRow.className = "pane-label-row";
 
   const promptLabel = document.createElement("span");
   promptLabel.className   = "pane-prompt-label";
   promptLabel.textContent = "SYSTEM PROMPT";
-
   labelRow.appendChild(promptLabel);
 
-  const regLabel = document.createElement("span");
-  regLabel.className = "pane-prompt-label";
-  regLabel.style.cssText = "margin-left:auto;margin-right:6px;opacity:0.5;";
-  regLabel.textContent = "Registry:";
-  regLabel.hidden = true;
-
-  let _prompts = [...registryPrompts];
-
-  const regSelect = document.createElement("select");
-  regSelect.className = "pane-model-select";
-  regSelect.style.maxWidth = "160px";
-  regSelect.hidden = true;
-
-  function buildRegOptions() {
-    regSelect.innerHTML = "";
-    const defaultOpt = document.createElement("option");
-    defaultOpt.value = "";
-    defaultOpt.textContent = "— load prompt —";
-    regSelect.appendChild(defaultOpt);
-    for (const p of _prompts) {
-      const opt = document.createElement("option");
-      opt.value = p.id;
-      opt.textContent = `${p.id} v${p.version}`;
-      regSelect.appendChild(opt);
-    }
-    const hasPrompts = _prompts.length > 0;
-    regLabel.hidden = !hasPrompts;
-    regSelect.hidden = !hasPrompts;
-  }
-
-  buildRegOptions();
-
-  regSelect.addEventListener("change", () => {
-    const selected = _prompts.find(p => p.id === regSelect.value);
-    if (!selected) return;
-    let body = selected.body || "";
-    if (body.startsWith("---")) {
-      const end = body.indexOf("---", 3);
-      if (end !== -1) body = body.slice(end + 3).trim();
-    }
-    textarea.value = body;
-    refreshPreview();
-    applyReset.click();
-    regSelect.value = "";
-  });
-
-  labelRow.appendChild(regLabel);
-  labelRow.appendChild(regSelect);
-
-  // Meta row (badge + model select + spacer + meter slot)
   const metaRow = document.createElement("div");
   metaRow.className = "pane-meta-row";
 
@@ -97,9 +43,7 @@ export function createPane({ id, container, initialPrompt, modelKeys = [], initi
   metaRow.appendChild(badge);
   metaRow.appendChild(modelSelect);
   metaRow.appendChild(metaSpacer);
-  // meter.js appends its element to metaRow after this
 
-  // Prompt body (read-only preview, click-to-edit)
   const promptBody = document.createElement("div");
   promptBody.className = "pane-prompt-body";
 
@@ -113,7 +57,6 @@ export function createPane({ id, container, initialPrompt, modelKeys = [], initi
   promptBody.appendChild(promptGt);
   promptBody.appendChild(promptPreviewText);
 
-  // Expanded area (textarea + Apply button)
   const expandedArea = document.createElement("div");
   expandedArea.className = "pane-prompt-expanded";
   expandedArea.hidden    = true;
@@ -130,19 +73,16 @@ export function createPane({ id, container, initialPrompt, modelKeys = [], initi
   expandedArea.appendChild(textarea);
   expandedArea.appendChild(applyReset);
 
-  // Hint line
   const hint = document.createElement("div");
   hint.className = "pane-prompt-hint";
   hint.textContent = "click to collapse · ⌘↵ to apply & reset";
 
-  // Assemble header
   header.appendChild(labelRow);
   header.appendChild(metaRow);
   header.appendChild(promptBody);
   header.appendChild(expandedArea);
   header.appendChild(hint);
 
-  // ── Toggle logic ─────────────────────────────────────
   function enterEditing() {
     header.classList.remove("collapsed");
     header.classList.add("editing");
@@ -181,11 +121,9 @@ export function createPane({ id, container, initialPrompt, modelKeys = [], initi
 
   applyReset.addEventListener("click", exitEditing);
 
-  // ── Log ──────────────────────────────────────────────
   const log = document.createElement("main");
   log.className = "pane-log";
 
-  // ── Empty state ───────────────────────────────────────
   const emptyState = document.createElement("div");
   emptyState.className = "empty-state";
   emptyState.innerHTML = `
@@ -193,44 +131,36 @@ export function createPane({ id, container, initialPrompt, modelKeys = [], initi
       <div class="empty-tag">— New conversation —</div>
       <div class="empty-hero">A quiet place to<br>iterate on your prompt.</div>
       <div class="empty-body">
-        Write a message below to start, or edit the system prompt above.
-        Turn on <em>use context</em> to ground responses in notes from your vault.
+        Write a directive below to start, or edit the system prompt above.
       </div>
       <div class="empty-shortcuts">
         <span class="kbd-chip">⌘↵ send</span>
         <span class="kbd-chip">⌘K sessions</span>
-        <span class="kbd-chip">⌘\\ compare</span>
       </div>
     </div>
   `;
   log.appendChild(emptyState);
 
-  // ── Assemble section ─────────────────────────────────
   section.appendChild(header);
   section.appendChild(log);
   container.appendChild(section);
 
-  // ── Exported API ─────────────────────────────────────
   const refreshPreview = () => {
     promptPreviewText.textContent = oneLinePreview(textarea.value);
   };
 
   function addBubble(role, text = "") {
     if (emptyState.parentNode === log) log.removeChild(emptyState);
-
     const wrap = document.createElement("div");
     wrap.className = "bubble-wrap " + role;
-
     const tag = document.createElement("div");
     tag.className   = "bubble-role";
-    tag.textContent = role === "user" ? "you" : "assistant";
+    tag.textContent = role === "user" ? "directive" : "assistant";
     wrap.appendChild(tag);
-
     const el = document.createElement("div");
     el.className  = "bubble " + role;
     el.textContent = text;
     wrap.appendChild(el);
-
     log.appendChild(wrap);
     log.scrollTop = log.scrollHeight;
     return el;
@@ -245,13 +175,17 @@ export function createPane({ id, container, initialPrompt, modelKeys = [], initi
     refreshPreview,
     modelSelect,
 
-    setModelKey(key) {
-      modelSelect.value = key;
+    getSystemPrompt() {
+      return textarea.value;
     },
 
-    setRegistryPrompts(prompts) {
-      _prompts = prompts;
-      buildRegOptions();
+    setSystemPrompt(body) {
+      textarea.value = body;
+      refreshPreview();
+    },
+
+    setModelKey(key) {
+      modelSelect.value = key;
     },
 
     onModelChange(fn) {

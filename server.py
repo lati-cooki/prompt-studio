@@ -87,6 +87,57 @@ def migrate_db(conn):
         raise
 
 
+def _seed_prompts_from_index(conn):
+    """Import prompts from registry/INDEX.json when the prompts table is empty."""
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM prompts")
+    if cursor.fetchone()[0] > 0:
+        return
+    index_path = os.path.join(os.path.dirname(__file__), "registry", "INDEX.json")
+    if not os.path.exists(index_path):
+        return
+    try:
+        with open(index_path) as f:
+            index = json.load(f)
+    except Exception:
+        return
+    owner = index.get("owner", "")
+    now = "strftime('%Y-%m-%dT%H:%M:%SZ','now')"
+    for p in index.get("prompts", []):
+        body = ""
+        fpath = p.get("file")
+        if fpath:
+            full = os.path.join(os.path.dirname(__file__), "registry", fpath)
+            try:
+                with open(full) as bf:
+                    body = bf.read()
+            except FileNotFoundError:
+                pass
+        try:
+            conn.execute(
+                """INSERT OR IGNORE INTO prompts
+                   (id, version, status, tier, owner, body, use_case,
+                    cost_per_run_usd, tokens_prompt_body, default_model,
+                    eval_status, file, notes, composes, tested_on,
+                    created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
+                   strftime('%Y-%m-%dT%H:%M:%SZ','now'),
+                   strftime('%Y-%m-%dT%H:%M:%SZ','now'))""",
+                (
+                    p.get("id"), p.get("version"), p.get("status"),
+                    p.get("tier"), owner, body, p.get("use_case"),
+                    p.get("cost_per_run_usd"), p.get("tokens_prompt_body"),
+                    p.get("default_model"), p.get("eval_status"),
+                    p.get("file"), p.get("notes"),
+                    json.dumps(p.get("composes", [])),
+                    json.dumps(p.get("tested_on", [])),
+                )
+            )
+        except Exception:
+            pass
+    conn.commit()
+
+
 def init_db():
     with open(SCHEMA_PATH) as f:
         schema = f.read()
@@ -95,6 +146,7 @@ def init_db():
         migrate_db(conn)
         conn.executescript(schema)
         conn.commit()
+        _seed_prompts_from_index(conn)
     finally:
         conn.close()
 

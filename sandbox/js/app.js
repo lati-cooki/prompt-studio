@@ -54,6 +54,12 @@ const registryPanel = createRegistryPanel({
   onSaveDraft:    handleSaveDraft,
   onValidate:     handleValidate,
   onViewRegistry: () => switchTab("registry"),
+  onSessionClick: (entry) => {
+    activeSessionId = entry.id;
+    $topbarSession.textContent = entry.name;
+    loadEntry(entry);
+    refreshSessionList();
+  },
 });
 
 // ── Model selector ─────────────────────────────────────
@@ -149,6 +155,7 @@ function applyPromptToAllPanes(prompt) {
   }
   updatePromptBadges(prompt);
   registryPanel.setPrompt(prompt);
+  refreshSessionList();
 }
 
 function updatePromptBadges(prompt) {
@@ -393,7 +400,8 @@ function loadEntry(entry) {
 }
 
 async function refreshSessionList() {
-  renderSessionList($sessionsList, await sessionsStore.load(), {
+  const sessions = await sessionsStore.load();
+  renderSessionList($sessionsList, sessions, {
     activeId: activeSessionId,
     onClick: async (entry) => {
       activeSessionId = entry.id;
@@ -409,6 +417,7 @@ async function refreshSessionList() {
       refreshSessionList();
     },
   });
+  registryPanel.setSessions(sessions, activePrompt?.id ?? null);
 }
 
 $newSession.addEventListener("click", resetToNewSession);

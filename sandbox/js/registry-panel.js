@@ -1,4 +1,4 @@
-export function createRegistryPanel({ container, onSaveDraft, onValidate, onViewRegistry }) {
+export function createRegistryPanel({ container, onSaveDraft, onValidate, onViewRegistry, onSessionClick }) {
   const panel = document.createElement("aside");
   panel.className = "registry-panel";
 
@@ -37,7 +37,17 @@ export function createRegistryPanel({ container, onSaveDraft, onValidate, onView
   viewBtn.textContent = "View full registry →";
   viewBtn.addEventListener("click", () => onViewRegistry && onViewRegistry());
 
-  panel.append(title, idEl, metaEl, divider1, statsEl, divider2, draftBtn, validateBtn, viewBtn);
+  const divider3 = document.createElement("hr");
+  divider3.className = "rp-divider";
+
+  const sessionsTitle = document.createElement("div");
+  sessionsTitle.className   = "rp-title";
+  sessionsTitle.textContent = "Recent Sessions";
+
+  const sessionsEl = document.createElement("div");
+  sessionsEl.className = "rp-sessions";
+
+  panel.append(title, idEl, metaEl, divider1, statsEl, divider2, draftBtn, validateBtn, viewBtn, divider3, sessionsTitle, sessionsEl);
   container.appendChild(panel);
 
   function stat(label, value) {
@@ -45,6 +55,17 @@ export function createRegistryPanel({ container, onSaveDraft, onValidate, onView
     row.className = "rp-stat";
     row.innerHTML = `${label} <span>${value ?? "—"}</span>`;
     return row;
+  }
+
+  function relativeTime(isoStr) {
+    if (!isoStr) return "";
+    const diff = Date.now() - new Date(isoStr).getTime();
+    const m = Math.floor(diff / 60000);
+    if (m < 1)  return "just now";
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ago`;
+    return `${Math.floor(h / 24)}d ago`;
   }
 
   return {
@@ -57,6 +78,7 @@ export function createRegistryPanel({ container, onSaveDraft, onValidate, onView
         statsEl.innerHTML    = "";
         draftBtn.disabled    = true;
         validateBtn.disabled = true;
+        sessionsEl.innerHTML = "";
         return;
       }
       idEl.textContent   = p.id;
@@ -69,6 +91,39 @@ export function createRegistryPanel({ container, onSaveDraft, onValidate, onView
       );
       draftBtn.disabled    = false;
       validateBtn.disabled = (p.eval_status === "validated");
+    },
+
+    setSessions(sessions, activePromptId) {
+      sessionsEl.innerHTML = "";
+      const relevant = sessions.filter(s => {
+        const raw = s.panes;
+        const ref = Array.isArray(raw) ? null : raw?.promptRef;
+        return ref?.id === activePromptId;
+      });
+      if (!relevant.length) {
+        const empty = document.createElement("div");
+        empty.className   = "rp-sessions-empty";
+        empty.textContent = "No sessions yet";
+        sessionsEl.appendChild(empty);
+        return;
+      }
+      for (const s of relevant.slice(0, 8)) {
+        const row = document.createElement("div");
+        row.className = "rp-session-row";
+        row.title     = s.name;
+
+        const name = document.createElement("span");
+        name.className   = "rp-session-name";
+        name.textContent = s.name;
+
+        const age = document.createElement("span");
+        age.className   = "rp-session-age";
+        age.textContent = relativeTime(s.updatedAt || s.createdAt);
+
+        row.append(name, age);
+        row.addEventListener("click", () => onSessionClick && onSessionClick(s));
+        sessionsEl.appendChild(row);
+      }
     },
   };
 }

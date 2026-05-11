@@ -104,7 +104,7 @@ body::after {
   letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink-4);
 }
 
-.rail-list { flex: 1; overflow-y: auto; padding-bottom: 4px; }
+.rail-list { flex: 1; min-height: 80px; overflow-y: auto; padding-bottom: 4px; }
 .rail-list::-webkit-scrollbar { width: 3px; }
 .rail-list::-webkit-scrollbar-track { background: transparent; }
 .rail-list::-webkit-scrollbar-thumb { background: var(--line); }
@@ -601,7 +601,7 @@ body::after {
 .rail-prompt-badge.validated { color: var(--green); background: rgba(46,112,72,.08); border: 1px solid rgba(46,112,72,.2); }
 
 /* ── Model checklist (rail) ── */
-.rail-model-section { padding: 10px 12px; border-bottom: 1px solid var(--line-2); }
+.rail-model-section { padding: 10px 12px; border-bottom: 1px solid var(--line-2); max-height: 160px; overflow-y: auto; flex-shrink: 0; }
 .model-group-label { font-family: var(--mono); font-size: 9px; color: var(--ink-4); text-transform: uppercase; letter-spacing: 0.06em; margin: 6px 0 3px; }
 .model-row { display: flex; align-items: center; gap: 6px; padding: 3px 0; cursor: pointer; font-size: 11.5px; color: var(--ink-2); }
 .model-row:hover { color: var(--ink); }
@@ -635,6 +635,12 @@ body::after {
 .rp-action.promote:hover { background: rgba(46,112,72,.05); }
 .rp-action.open-reg { font-size: 9.5px; }
 .rp-action:disabled { opacity: 0.4; cursor: default; }
+.rp-sessions { display: flex; flex-direction: column; gap: 1px; }
+.rp-sessions-empty { font-size: 10.5px; color: var(--ink-4); font-style: italic; }
+.rp-session-row { display: flex; align-items: center; gap: 4px; padding: 4px 6px; border-radius: 3px; cursor: pointer; }
+.rp-session-row:hover { background: var(--paper-3); }
+.rp-session-name { flex: 1; font-size: 11px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rp-session-age { font-family: var(--mono); font-size: 9px; color: var(--ink-4); flex-shrink: 0; }
 
 /* ── Registry iframe tab ── */
 .registry-frame { flex: 1; border: none; background: var(--paper); display: none; }

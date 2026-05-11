@@ -393,6 +393,7 @@ function render() {
           </dl>
           <div class="actions">
             ${d.body ? `<button onclick="event.stopPropagation(); showBody(${JSON.stringify(d.id)}, ${JSON.stringify(d.version)})">View body</button>` : ""}
+            <button onclick="event.stopPropagation(); window.parent.postMessage({type:'loadPrompt',id:${JSON.stringify(d.id)},version:${JSON.stringify(d.version)}},'*')">Open in Eval →</button>
           </div>
         </div>
       </div>

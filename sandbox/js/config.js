@@ -4,33 +4,77 @@ export const MODELS = {
     endpoint:      "http://localhost:8080/v1/chat/completions",
     contextWindow: 128000,
     group:         "local",
+    provider:      "local",
   },
   "qwen3-4b": {
     id:            "mlx-community/Qwen3-4B-Instruct-2507-4bit",
     endpoint:      "http://localhost:8091/v1/chat/completions",
     contextWindow: 262144,
     group:         "local",
+    provider:      "local",
   },
   "qwen3-27b": {
     id:            "Jackrong/MLX-Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-v2-4bit",
     endpoint:      "http://localhost:8092/v1/chat/completions",
     contextWindow: 262144,
     group:         "local",
+    provider:      "local",
   },
 };
 
 export const FRONTIER_MODELS = {
+  // Anthropic
   "claude-haiku-4-5": {
     id:            "claude-haiku-4-5-20251001",
     endpoint:      "/api/chat",
     contextWindow: 200000,
     group:         "frontier",
+    provider:      "anthropic",
   },
   "claude-sonnet-4-6": {
     id:            "claude-sonnet-4-6",
     endpoint:      "/api/chat",
     contextWindow: 200000,
     group:         "frontier",
+    provider:      "anthropic",
+  },
+  // OpenAI
+  "gpt-4o": {
+    id:            "gpt-4o",
+    endpoint:      "/api/chat",
+    contextWindow: 128000,
+    group:         "frontier",
+    provider:      "openai",
+  },
+  "gpt-4o-mini": {
+    id:            "gpt-4o-mini",
+    endpoint:      "/api/chat",
+    contextWindow: 128000,
+    group:         "frontier",
+    provider:      "openai",
+  },
+  // xAI Grok
+  "grok-3": {
+    id:            "grok-3",
+    endpoint:      "/api/chat",
+    contextWindow: 131072,
+    group:         "frontier",
+    provider:      "xai",
+  },
+  // Google Gemini
+  "gemini-2.5-pro": {
+    id:            "gemini-2.5-pro-preview-05-06",
+    endpoint:      "/api/chat",
+    contextWindow: 1000000,
+    group:         "frontier",
+    provider:      "google",
+  },
+  "gemini-2.5-flash": {
+    id:            "gemini-2.5-flash-preview-04-17",
+    endpoint:      "/api/chat",
+    contextWindow: 1000000,
+    group:         "frontier",
+    provider:      "google",
   },
 };
 

@@ -50,9 +50,10 @@ export function createModelSelector({ container, models, initialKeys, onChange }
       name.className   = "model-name";
       name.textContent = key;
 
+      const provider = models[key]?.provider ?? groupName;
       const tag = document.createElement("span");
-      tag.className   = `model-tag ${groupName}`;
-      tag.textContent = groupName;
+      tag.className   = `model-tag ${provider}`;
+      tag.textContent = provider;
 
       cb.addEventListener("change", () => {
         state.toggle(key);

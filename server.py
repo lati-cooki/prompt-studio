@@ -4,6 +4,8 @@ import os
 import socketserver
 import json
 import sqlite3
+import urllib.request
+import urllib.error
 
 def _load_dotenv(path=".env"):
     """Load key=value pairs from .env into os.environ (no-op if file absent)."""
@@ -562,10 +564,38 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             conn.close()
         self.send_json({"status": "validated", "id": prompt_id, "version": version})
 
+    # OpenAI-compatible provider config: provider → (base_url, env_var)
+    _OPENAI_COMPAT = {
+        "openai": ("https://api.openai.com/v1/chat/completions",                                      "OPENAI_API_KEY"),
+        "xai":    ("https://api.x.ai/v1/chat/completions",                                            "XAI_API_KEY"),
+        "google": ("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",        "GEMINI_API_KEY"),
+    }
+
     def handle_post_chat(self):
         data = self.read_json_body()
         if data is None:
             return
+
+        model_id = data.get('model', '')
+        if not model_id:
+            self.send_json({"error": "model required"}, status=400)
+            return
+
+        provider = data.get('provider', 'anthropic')
+
+        if provider == 'anthropic':
+            self._stream_anthropic(model_id, data.get('messages', []))
+        elif provider in self._OPENAI_COMPAT:
+            endpoint_url, env_var = self._OPENAI_COMPAT[provider]
+            api_key = os.environ.get(env_var)
+            if not api_key:
+                self.send_json({"error": f"{env_var} not configured"}, status=503)
+                return
+            self._stream_openai_compat(endpoint_url, api_key, model_id, data.get('messages', []))
+        else:
+            self.send_json({"error": f"Unknown provider: {provider}"}, status=400)
+
+    def _stream_anthropic(self, model_id, messages):
         api_key = os.environ.get('ANTHROPIC_API_KEY')
         if not api_key:
             self.send_json({"error": "ANTHROPIC_API_KEY not configured"}, status=503)
@@ -574,11 +604,6 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json({"error": "anthropic package not installed"}, status=503)
             return
 
-        model_id = data.get('model', '')
-        if not model_id:
-            self.send_json({"error": "model required"}, status=400)
-            return
-        messages = data.get('messages', [])
         system_msgs = [m for m in messages if m.get('role') == 'system']
         user_msgs   = [m for m in messages if m.get('role') != 'system']
         system = "\n\n".join(m['content'] for m in system_msgs) if system_msgs else ''
@@ -611,6 +636,49 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 self.wfile.write(f"data: {usage_chunk}\n\n".encode())
                 self.wfile.write(b"data: [DONE]\n\n")
                 self.wfile.flush()
+        except Exception as err:
+            error_chunk = json.dumps({"error": str(err)})
+            self.wfile.write(f"data: {error_chunk}\n\n".encode())
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+
+    def _stream_openai_compat(self, endpoint_url, api_key, model_id, messages):
+        """Proxy an OpenAI-compatible streaming request. Response is already OpenAI SSE
+        format so it can be piped directly to the client without translation."""
+        payload = json.dumps({
+            "model":      model_id,
+            "messages":   messages,
+            "stream":     True,
+            "max_tokens": 8096,
+        }).encode()
+
+        req = urllib.request.Request(endpoint_url, data=payload, method='POST')
+        req.add_header('Content-Type',  'application/json')
+        req.add_header('Authorization', f'Bearer {api_key}')
+
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/event-stream')
+        self.send_header('Cache-Control', 'no-cache')
+        self.end_headers()
+
+        try:
+            with urllib.request.urlopen(req) as response:
+                while True:
+                    chunk = response.read(4096)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    self.wfile.flush()
+        except urllib.error.HTTPError as err:
+            body = err.read().decode('utf-8', errors='replace')
+            try:
+                msg = json.loads(body).get('error', {}).get('message', body)
+            except Exception:
+                msg = body[:200]
+            error_chunk = json.dumps({"error": msg})
+            self.wfile.write(f"data: {error_chunk}\n\n".encode())
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
         except Exception as err:
             error_chunk = json.dumps({"error": str(err)})
             self.wfile.write(f"data: {error_chunk}\n\n".encode())

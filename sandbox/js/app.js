@@ -396,6 +396,32 @@ $exportBtn.addEventListener("click", () => {
   });
 });
 
+// Load a system prompt pushed from the registry widget
+(function applyPendingRegistryPrompt() {
+  let pending = null;
+  try {
+    const raw = localStorage.getItem("promptSandbox.pendingSystemPrompt")
+             || sessionStorage.getItem("promptSandbox.pendingSystemPrompt");
+    if (raw) {
+      pending = JSON.parse(raw);
+      try { localStorage.removeItem("promptSandbox.pendingSystemPrompt"); } catch {}
+      try { sessionStorage.removeItem("promptSandbox.pendingSystemPrompt"); } catch {}
+    }
+  } catch { /* storage unavailable */ }
+
+  if (!pending?.body) return;
+
+  stateA.applyPrompt(pending.body);
+  paneA.textarea.value = pending.body;
+  paneA.refreshPreview();
+  paneA.clearLog();
+  activeSessionId = null;
+  $topbarSession.textContent  = `${pending.id}@${pending.version}`;
+  $topbarSubtitle.textContent = "loaded from registry";
+  $vaultStatus.textContent    = `System prompt loaded: ${pending.id}@${pending.version}`;
+  setTimeout(() => { $vaultStatus.textContent = ""; }, 6000);
+})();
+
 refreshSessionList();
 
 // ── Keyboard shortcuts ───────────────────────────────────

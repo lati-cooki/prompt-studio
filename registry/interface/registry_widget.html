@@ -392,6 +392,7 @@ function render() {
             <dt>Composes</dt><dd>${d.composes && d.composes.length ? d.composes.map(esc).join(", ") : "none"}</dd>
           </dl>
           <div class="actions">
+            <button onclick="event.stopPropagation(); openInSandbox(${JSON.stringify(d.id)}, ${JSON.stringify(d.version)})">Open in sandbox</button>
             ${d.body ? `<button onclick="event.stopPropagation(); showBody(${JSON.stringify(d.id)}, ${JSON.stringify(d.version)})">View body</button>` : ""}
           </div>
         </div>
@@ -410,6 +411,39 @@ function showBody(id, version) {
   const win = window.open("", "_blank");
   win.document.write(`<pre style="font-family:monospace;white-space:pre-wrap;padding:1rem">${entry.body.replace(/&/g,"&amp;").replace(/</g,"&lt;")}</pre>`);
   win.document.close();
+}
+
+async function openInSandbox(id, version) {
+  const entry = data.find(d => d.id === id && d.version === version);
+  let body = entry?.body ?? null;
+
+  if (!body) {
+    try {
+      const res = await fetch(`${API_BASE}/prompts/${encodeURIComponent(id)}/body`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      body = (await res.json()).body;
+    } catch (err) {
+      alert(`Could not load prompt body: ${err.message}`);
+      return;
+    }
+  }
+
+  if (!body) {
+    alert("This prompt has no body stored. Register it with a body first.");
+    return;
+  }
+
+  try {
+    localStorage.setItem("promptSandbox.pendingSystemPrompt", JSON.stringify({
+      id, version, body,
+      model: entry?.defaultModel ?? null,
+    }));
+  } catch {
+    // localStorage unavailable — pass body via sessionStorage fallback
+    try { sessionStorage.setItem("promptSandbox.pendingSystemPrompt", JSON.stringify({ id, version, body, model: entry?.defaultModel ?? null })); } catch {}
+  }
+
+  window.location.href = window.location.origin + "/";
 }
 
 async function loadData() {

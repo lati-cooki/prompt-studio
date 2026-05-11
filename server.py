@@ -54,6 +54,9 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             self.handle_get_sessions()
         elif self.path == '/api/prompts':
             self.handle_get_prompts()
+        elif self.path.startswith('/api/prompts/') and self.path.endswith('/body'):
+            prompt_id = self.path[len('/api/prompts/'):-len('/body')]
+            self.handle_get_prompt_body(prompt_id)
         elif self.path in ('/', '/sandbox', '/sandbox/'):
             self.serve_file('sandbox/index.html', 'text/html')
         elif self.path in ('/registry', '/registry/'):
@@ -121,6 +124,37 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         except (json.JSONDecodeError, UnicodeDecodeError):
             self.send_error(400, "Invalid JSON")
             return None
+
+    def handle_get_prompt_body(self, prompt_id):
+        conn = self.get_db()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT body, file FROM prompts WHERE id = ?", (prompt_id,))
+            row = cursor.fetchone()
+        finally:
+            conn.close()
+
+        if row is None:
+            self.send_error(404, "Prompt not found")
+            return
+
+        body = row["body"]
+        if body:
+            self.send_json({"body": body})
+            return
+
+        file_path = row["file"]
+        if not file_path:
+            self.send_error(404, "Prompt has no body or file")
+            return
+
+        full_path = os.path.join("registry", file_path)
+        try:
+            with open(full_path) as f:
+                body = f.read()
+            self.send_json({"body": body})
+        except FileNotFoundError:
+            self.send_error(404, f"Prompt file not found: {file_path}")
 
     def handle_get_sessions(self):
         conn = self.get_db()

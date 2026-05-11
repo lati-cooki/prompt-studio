@@ -38,3 +38,37 @@ export async function deleteSession(id) {
   if (!res.ok) throw new Error("Failed to delete session");
   return res.json();
 }
+
+export async function fetchPrompts() {
+  const res = await fetch(`${getApiBase()}/prompts`);
+  if (!res.ok) throw new Error("Failed to fetch prompts");
+  return res.json();
+}
+
+export async function savePrompt(promptData) {
+  const res = await fetch(`${getApiBase()}/prompts`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(promptData),
+  });
+  if (!res.ok) throw new Error("Failed to save prompt");
+  return res.json();
+}
+
+export async function updatePrompt(id, fields) {
+  const res = await fetch(`${getApiBase()}/prompts/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(fields),
+  });
+  if (!res.ok) throw new Error("Failed to update prompt");
+  return res.json();
+}
+
+export async function deletePrompt(id) {
+  const res = await fetch(`${getApiBase()}/prompts/${id}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error("Failed to delete prompt");
+  return res.json();
+}

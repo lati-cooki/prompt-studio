@@ -269,34 +269,29 @@ select {
   <div class="doc-header">
     <div class="doc-eyebrow">Prompt Studio · Registry · v0.1</div>
     <h1 class="doc-title">Prompt Registry</h1>
-    <div class="doc-meta">
-      <span>7 entries</span>
-      <span>2 tiers</span>
-      <span>1 eval batch</span>
-      <span>last updated 2026-05-04</span>
+    <div class="doc-meta" id="doc-meta">
+      <span id="meta-count">loading…</span>
     </div>
   </div>
 
-  <div class="info-banner">
-    Standalone snapshot. Action buttons describe what they would do in a connected environment — they do not currently send anything.
-  </div>
+  <div id="error-banner" class="info-banner" style="display:none;border-left-color:var(--red);color:var(--red)"></div>
 
   <div class="stats">
     <div class="stat">
       <div class="stat-label">Total prompts</div>
-      <div class="stat-val">7</div>
+      <div class="stat-val" id="stat-total">—</div>
     </div>
     <div class="stat">
       <div class="stat-label">In production</div>
-      <div class="stat-val">3</div>
+      <div class="stat-val" id="stat-production">—</div>
     </div>
     <div class="stat">
       <div class="stat-label">Eval coverage</div>
-      <div class="stat-val">57%</div>
+      <div class="stat-val" id="stat-eval">—</div>
     </div>
     <div class="stat">
       <div class="stat-label">Avg cost / run</div>
-      <div class="stat-val">$0.05</div>
+      <div class="stat-val" id="stat-cost">—</div>
     </div>
   </div>
 
@@ -316,68 +311,88 @@ select {
 
   <div id="rows"></div>
 
-  <div class="doc-footer">
-    Built 2026-05-04. No backing store. Action buttons are informational only in this standalone snapshot.<br>
-    To make this live, connect to INDEX.json or a database.
+  <div class="doc-footer" id="doc-footer">
+    Connected to Prompt Studio API.
   </div>
 
 </div>
 
 <script>
-const data = [
-  { id: "consensus_protocol", version: "1.1.0", status: "draft", tier: "audit", cost: 0.04, costStr: "~$0.04", tokens: 2650, defaultModel: "gemini-2.5-pro", evalStatus: "pending", useCase: "Canonical multi-model decision committee", composes: [], note: "Awaiting regression test on arithmetic-validation gap" },
-  { id: "consensus_protocol", version: "1.0.0", status: "deprecated", tier: "audit", cost: 0.04, costStr: "~$0.04", tokens: 2400, defaultModel: "gemini-2.5-pro", evalStatus: "batch#1 ✓", useCase: "Prior version; missed input-validation step", composes: [], note: "4-model batch: 2/4 caught arithmetic inconsistency. Reason for v1.1.0." },
-  { id: "committee_review", version: "1.1", status: "production", tier: "audit", cost: 0.09, costStr: "~$0.09", tokens: 2950, defaultModel: "gpt-5.5", evalStatus: "passed", useCase: "Premium 6-lane strategic audit", composes: [], note: "Higher citation-source-tier than consensus_protocol" },
-  { id: "premium_enterprise_review", version: "1.0", status: "active", tier: "audit", cost: 0.18, costStr: "~$0.18", tokens: 4200, defaultModel: "claude-opus-4.7", evalStatus: "passed", useCase: "Enterprise / high-stakes (Opus)", composes: [], note: "Most thorough development per lane; verbose" },
-  { id: "lite_fast_review", version: "1.0", status: "active", tier: "audit", cost: 0.008, costStr: "~$0.008", tokens: 1450, defaultModel: "gemini-2.5-flash", evalStatus: "unevaluated", useCase: "High-volume / fast", composes: [], note: "Quality-cliff probe pending" },
-  { id: "standard_advice", version: "1.0", status: "production", tier: "advisory", cost: 0.002, costStr: "~$0.002", tokens: 420, defaultModel: "claude-haiku-4.5", evalStatus: "passed", useCase: "Fast single-model advice", composes: [], note: "Stable; high invocation count expected" },
-  { id: "industry_playbook_technology", version: "1.0", status: "active", tier: "reference", cost: null, costStr: "—", tokens: null, defaultModel: "—", evalStatus: "n/a", useCase: "Tech few-shot examples (composable)", composes: [], note: "Not runnable standalone; called by other prompts" }
-];
+const API_BASE = (function() {
+  const base = window.PROMPT_STUDIO_API_BASE || "http://localhost:8000/api";
+  return base;
+})();
 
+let data = [];
 let activeFilter = "all";
 let activeSort   = "name";
+
+function esc(str) {
+  return String(str ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function costStr(c) {
+  if (c == null) return "—";
+  return `~$${Number(c).toFixed(c < 0.01 ? 4 : 2)}`;
+}
+
+function updateStats() {
+  const total      = data.length;
+  const production = data.filter(d => d.status === "production").length;
+  const evaled     = data.filter(d => d.evalStatus && d.evalStatus !== "unevaluated" && d.evalStatus !== "pending").length;
+  const evalPct    = total ? Math.round(evaled / total * 100) + "%" : "—";
+  const costs      = data.map(d => d.costPerRunUsd).filter(c => c != null);
+  const avgCost    = costs.length ? "$" + (costs.reduce((a, b) => a + b, 0) / costs.length).toFixed(3) : "—";
+
+  const tiers = [...new Set(data.map(d => d.tier).filter(Boolean))];
+  document.getElementById("meta-count").textContent =
+    `${total} entries · ${tiers.length} tier${tiers.length !== 1 ? "s" : ""}`;
+
+  document.getElementById("stat-total").textContent      = total;
+  document.getElementById("stat-production").textContent = production;
+  document.getElementById("stat-eval").textContent       = evalPct;
+  document.getElementById("stat-cost").textContent       = avgCost;
+}
 
 function render() {
   let rows = data.filter(d => activeFilter === "all" || d.tier === activeFilter);
   rows.sort((a, b) => {
-    if (activeSort === "cost")   return (b.cost || 0) - (a.cost || 0);
-    if (activeSort === "tokens") return (b.tokens || 0) - (a.tokens || 0);
-    if (activeSort === "status") return a.status.localeCompare(b.status);
-    return a.id.localeCompare(b.id) || a.version.localeCompare(b.version);
+    if (activeSort === "cost")   return (b.costPerRunUsd || 0) - (a.costPerRunUsd || 0);
+    if (activeSort === "tokens") return (b.tokensPromptBody || 0) - (a.tokensPromptBody || 0);
+    if (activeSort === "status") return (a.status || "").localeCompare(b.status || "");
+    return (a.id || "").localeCompare(b.id || "") || (a.version || "").localeCompare(b.version || "");
   });
 
-  document.getElementById("rows").innerHTML = rows.map((d, i) => `
-    <div class="row" data-id="${d.id}-${d.version}">
+  document.getElementById("rows").innerHTML = rows.map(d => `
+    <div class="row" data-id="${esc(d.id)}-${esc(d.version)}">
       <div class="row-main">
         <span class="row-marker">→</span>
         <div class="row-id-block">
           <div class="row-id">
-            <span class="id">${d.id}</span>
-            <span class="ver">@${d.version}</span>
+            <span class="id">${esc(d.id)}</span>
+            <span class="ver">@${esc(d.version)}</span>
           </div>
-          <div class="row-use">${d.useCase}</div>
+          <div class="row-use">${esc(d.useCase)}</div>
         </div>
         <div class="badges">
-          <span class="badge b-tier-${d.tier}">${d.tier}</span>
-          <span class="badge b-${d.status}">${d.status}</span>
+          ${d.tier ? `<span class="badge b-tier-${esc(d.tier)}">${esc(d.tier)}</span>` : ""}
+          ${d.status ? `<span class="badge b-${esc(d.status)}">${esc(d.status)}</span>` : ""}
         </div>
         <div class="row-cost">
-          <div class="row-cost-amt">${d.costStr}</div>
-          <div class="row-cost-tok">${d.tokens ? d.tokens.toLocaleString() + " tok" : "—"}</div>
+          <div class="row-cost-amt">${esc(costStr(d.costPerRunUsd))}</div>
+          <div class="row-cost-tok">${d.tokensPromptBody ? Number(d.tokensPromptBody).toLocaleString() + " tok" : "—"}</div>
         </div>
       </div>
       <div class="detail">
         <div class="detail-inner">
           <dl class="kv">
-            <dt>Default model</dt><dd class="mono">${d.defaultModel}</dd>
-            <dt>Eval status</dt><dd>${d.evalStatus}</dd>
-            <dt>Notes</dt><dd>${d.note}</dd>
-            <dt>Composes</dt><dd>${d.composes.length ? d.composes.join(", ") : "none"}</dd>
+            <dt>Default model</dt><dd class="mono">${esc(d.defaultModel ?? "—")}</dd>
+            <dt>Eval status</dt><dd>${esc(d.evalStatus ?? "—")}</dd>
+            <dt>Notes</dt><dd>${esc(d.notes ?? "")}</dd>
+            <dt>Composes</dt><dd>${d.composes && d.composes.length ? d.composes.map(esc).join(", ") : "none"}</dd>
           </dl>
           <div class="actions">
-            <button onclick="event.stopPropagation(); alert('Would view body of ${d.id}@${d.version}')">View body</button>
-            <button onclick="event.stopPropagation(); alert('Would run ${d.id}@${d.version}')">Run</button>
-            <button onclick="event.stopPropagation(); alert('Would show eval history for ${d.id}@${d.version}')">Eval history</button>
+            ${d.body ? `<button onclick="event.stopPropagation(); showBody(${JSON.stringify(d.id)}, ${JSON.stringify(d.version)})">View body</button>` : ""}
           </div>
         </div>
       </div>
@@ -387,6 +402,30 @@ function render() {
   document.querySelectorAll(".row").forEach(r => {
     r.addEventListener("click", () => r.classList.toggle("expanded"));
   });
+}
+
+function showBody(id, version) {
+  const entry = data.find(d => d.id === id && d.version === version);
+  if (!entry?.body) return;
+  const win = window.open("", "_blank");
+  win.document.write(`<pre style="font-family:monospace;white-space:pre-wrap;padding:1rem">${entry.body.replace(/&/g,"&amp;").replace(/</g,"&lt;")}</pre>`);
+  win.document.close();
+}
+
+async function loadData() {
+  try {
+    const res = await fetch(`${API_BASE}/prompts`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    data = await res.json();
+    document.getElementById("error-banner").style.display = "none";
+    updateStats();
+    render();
+  } catch (err) {
+    const banner = document.getElementById("error-banner");
+    banner.textContent = `Could not load prompts from API: ${err.message}`;
+    banner.style.display = "block";
+    document.getElementById("meta-count").textContent = "offline";
+  }
 }
 
 document.querySelectorAll(".filter-btn").forEach(b => {
@@ -402,7 +441,7 @@ document.getElementById("sort").addEventListener("change", e => {
   render();
 });
 
-render();
+loadData();
 </script>
 </body>
 </html>

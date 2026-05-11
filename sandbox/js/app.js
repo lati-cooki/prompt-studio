@@ -5,7 +5,7 @@ import { pingVaultHealth, reindexVault }        from "./vault.js";
 import { DEFAULT_SYSTEM_PROMPT, MODELS, getActiveModelKey } from "./config.js";
 import { renderSaveSlot, renderSessionList }    from "./session-rail.js";
 import { buildMarkdown, triggerMarkdownDownload, slugify } from "./export.js";
-import { createSessionsStore, resolveModelKey } from "./sessions.js";
+import { createSessionsStore, resolveModelKey, exportToRegistryDraft } from "./sessions.js";
 import { createMeter }                          from "./meter.js";
 
 const paneContainer = document.getElementById("pane-container");
@@ -361,6 +361,28 @@ renderSaveSlot(document.getElementById("sessions-save-slot"), {
       setTimeout(() => { $vaultStatus.textContent = ""; }, 6000);
     }
   },
+});
+
+document.getElementById("export-draft-btn").addEventListener("click", () => {
+  const snapshot = currentSnapshot();
+  const name     = autoName();
+  let draft;
+  try {
+    draft = exportToRegistryDraft({ name, ...snapshot });
+  } catch (err) {
+    $vaultStatus.textContent = `Export failed: ${err.message}`;
+    setTimeout(() => { $vaultStatus.textContent = ""; }, 5000);
+    return;
+  }
+  const blob = new Blob([JSON.stringify(draft, null, 2)], { type: "application/json" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href     = url;
+  a.download = `${slugify(name)}-draft.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
 
 $exportBtn.addEventListener("click", () => {

@@ -182,19 +182,53 @@ class TestPromptValidate(unittest.TestCase):
 
     def test_validate_sets_production_and_validated(self):
         import server
+        import sqlite3
         handler = object.__new__(server.PromptStudioHandler)
         handler.send_json = MagicMock()
         handler.send_error = MagicMock()
-        conn = self._make_db_with_draft()
-        handler.get_db = lambda: conn
 
-        handler.handle_post_prompt_validate("my_prompt", "1.1.0")
+        # Use a file-based temp DB so we can re-query after the handler closes its connection
+        import tempfile, os
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+            db_path = f.name
+        try:
+            setup_conn = sqlite3.connect(db_path)
+            setup_conn.row_factory = sqlite3.Row
+            setup_conn.executescript("""
+                CREATE TABLE prompts (
+                    id TEXT NOT NULL, version TEXT NOT NULL,
+                    status TEXT, tier TEXT, owner TEXT, body TEXT,
+                    use_case TEXT, cost_per_run_usd REAL,
+                    tokens_prompt_body INTEGER, default_model TEXT,
+                    eval_status TEXT, file TEXT, notes TEXT,
+                    composes TEXT, tested_on TEXT,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+                    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+                    PRIMARY KEY (id, version)
+                );
+                INSERT INTO prompts VALUES (
+                    'my_prompt','1.1.0','draft',NULL,NULL,'body',
+                    NULL,NULL,NULL,NULL,'pending',NULL,NULL,NULL,NULL,
+                    strftime('%Y-%m-%dT%H:%M:%SZ','now'),
+                    strftime('%Y-%m-%dT%H:%M:%SZ','now')
+                );
+            """)
+            setup_conn.close()
 
-        row = conn.execute(
-            "SELECT status, eval_status FROM prompts WHERE id='my_prompt' AND version='1.1.0'"
-        ).fetchone()
-        self.assertEqual(row["status"], "production")
-        self.assertEqual(row["eval_status"], "validated")
+            handler.get_db = lambda: sqlite3.connect(db_path, detect_types=sqlite3.PARSE_DECLTYPES)
+
+            handler.handle_post_prompt_validate("my_prompt", "1.1.0")
+
+            verify_conn = sqlite3.connect(db_path)
+            verify_conn.row_factory = sqlite3.Row
+            row = verify_conn.execute(
+                "SELECT status, eval_status FROM prompts WHERE id='my_prompt' AND version='1.1.0'"
+            ).fetchone()
+            verify_conn.close()
+            self.assertEqual(row["status"], "production")
+            self.assertEqual(row["eval_status"], "validated")
+        finally:
+            os.unlink(db_path)
 
     def test_validate_404_for_missing(self):
         import server

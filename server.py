@@ -376,7 +376,15 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         try:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT version FROM prompts WHERE id=? ORDER BY version DESC",
+                """SELECT version FROM prompts WHERE id=?
+                   ORDER BY
+                     CAST(SUBSTR(version, 1, INSTR(version,'.')-1) AS INTEGER) DESC,
+                     CAST(SUBSTR(version, INSTR(version,'.')+1,
+                       INSTR(SUBSTR(version, INSTR(version,'.')+1), '.')-1) AS INTEGER) DESC,
+                     CAST(SUBSTR(version,
+                       INSTR(version,'.')+1 + INSTR(SUBSTR(version, INSTR(version,'.')+1), '.'))
+                       AS INTEGER) DESC
+                   LIMIT 1""",
                 (prompt_id,)
             )
             rows = cursor.fetchall()
@@ -403,17 +411,20 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
 
     def handle_post_prompt_validate(self, prompt_id, version):
         conn = self.get_db()
-        cursor = conn.cursor()
-        cursor.execute(
-            """UPDATE prompts SET status='production', eval_status='validated',
-               updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
-               WHERE id=? AND version=?""",
-            (prompt_id, version)
-        )
-        conn.commit()
-        if cursor.rowcount == 0:
-            self.send_error(404, "Prompt not found")
-            return
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """UPDATE prompts SET status='production', eval_status='validated',
+                   updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
+                   WHERE id=? AND version=?""",
+                (prompt_id, version)
+            )
+            conn.commit()
+            if cursor.rowcount == 0:
+                self.send_error(404, "Prompt not found")
+                return
+        finally:
+            conn.close()
         self.send_json({"status": "validated", "id": prompt_id, "version": version})
 
     def handle_post_chat(self):

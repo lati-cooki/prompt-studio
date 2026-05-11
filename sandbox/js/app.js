@@ -1,130 +1,251 @@
-import { createPaneState }                      from "./state.js";
-import { createPane }                           from "./pane.js";
-import { sendToPanes }                          from "./send.js";
-import { pingVaultHealth, reindexVault }        from "./vault.js";
-import { DEFAULT_SYSTEM_PROMPT, MODELS, getActiveModelKey } from "./config.js";
-import { renderSaveSlot, renderSessionList }    from "./session-rail.js";
+import { createPaneState }     from "./state.js";
+import { createPane }          from "./pane.js";
+import { sendToPanes }         from "./send.js";
+import { pingVaultHealth, reindexVault } from "./vault.js";
+import { ALL_MODELS, getActiveModelKey } from "./config.js";
+import { renderSaveSlot, renderSessionList } from "./session-rail.js";
 import { buildMarkdown, triggerMarkdownDownload, slugify } from "./export.js";
-import { createSessionsStore, resolveModelKey, exportToRegistryDraft } from "./sessions.js";
-import { createMeter }                          from "./meter.js";
+import { createSessionsStore, resolveSession } from "./sessions.js";
+import { createMeter }         from "./meter.js";
+import { createModelSelector } from "./model-selector.js";
+import { createRegistryPanel } from "./registry-panel.js";
+import * as api from "./api.js";
 
-const paneContainer = document.getElementById("pane-container");
-const stateA = createPaneState(DEFAULT_SYSTEM_PROMPT);
-let   stateB = null;
-let   paneB  = null;
+// ── State ──────────────────────────────────────────────
+let registryPrompts   = [];
+let activePrompt      = null;
+let activePaneMap     = {};   // modelKey → { state, pane, meter }
+let activeSessionId   = null;
+let selectedModelKeys = new Set([getActiveModelKey()]);
 
-let modelKeyA = getActiveModelKey();
-let modelKeyB = null;
+const sessionsStore = createSessionsStore();
 
-let registryPrompts = [];
+// ── DOM refs ───────────────────────────────────────────
+const $paneContainer     = document.getElementById("pane-container");
+const $input             = document.getElementById("input");
+const $send              = document.getElementById("send");
+const $newSession        = document.getElementById("new-session");
+const $saveSessionBtn    = document.getElementById("save-session-btn");
+const $exportBtn         = document.getElementById("export-btn");
+const $stopBtn           = document.getElementById("stop-btn");
+const $useVault          = document.getElementById("use-vault");
+const $topK              = document.getElementById("top-k");
+const $reindex           = document.getElementById("reindex");
+const $vaultStatus       = document.getElementById("vault-status");
+const $vaultHealth       = document.getElementById("vault-health");
+const $vaultCardSub      = document.getElementById("vault-card-sub");
+const $vaultCheckVisual  = document.getElementById("vault-checkbox-visual");
+const $topbarSession     = document.getElementById("topbar-session");
+const $topbarSubtitle    = document.getElementById("topbar-subtitle");
+const $topbarDots        = document.getElementById("topbar-dots");
+const $sessionsList      = document.getElementById("sessions-list");
+const $promptPicker      = document.getElementById("prompt-picker");
+const $promptBadges      = document.getElementById("prompt-badges");
+const $modelChecklist    = document.getElementById("model-checklist");
+const $registryPanelMount = document.getElementById("registry-panel-mount");
+const $tabEval           = document.getElementById("tab-eval");
+const $tabRegistry       = document.getElementById("tab-registry");
+const $registryFrame     = document.getElementById("registry-frame");
+const $composer          = document.getElementById("composer");
 
-async function loadRegistryPrompts() {
-  try {
-    const res = await fetch("/api/prompts");
-    if (!res.ok) return;
-    registryPrompts = await res.json();
-    paneA.setRegistryPrompts(registryPrompts);
-    paneB?.setRegistryPrompts(registryPrompts);
-  } catch { /* server may not be running — degrade gracefully */ }
+// ── Registry panel ─────────────────────────────────────
+const registryPanel = createRegistryPanel({
+  container:      $registryPanelMount,
+  onSaveDraft:    handleSaveDraft,
+  onValidate:     handleValidate,
+  onViewRegistry: () => switchTab("registry"),
+});
+
+// ── Model selector ─────────────────────────────────────
+createModelSelector({
+  container:   $modelChecklist,
+  models:      ALL_MODELS,
+  initialKeys: [getActiveModelKey()],
+  onChange(keys) {
+    selectedModelKeys = keys;
+    syncPanes();
+  },
+});
+
+// ── Pane management ─────────────────────────────────────
+function getSystemPromptBody() {
+  return activePrompt?.body ?? "";
 }
 
-const paneA = createPane({
-  id:              "A",
-  container:       paneContainer,
-  initialPrompt:   DEFAULT_SYSTEM_PROMPT,
-  modelKeys:       Object.keys(MODELS),
-  initialModelKey: modelKeyA,
-  registryPrompts,
-});
-
-const activePanes = () => paneB
-  ? [{ state: stateA, pane: paneA, model: MODELS[modelKeyA] },
-     { state: stateB, pane: paneB, model: MODELS[modelKeyB] }]
-  : [{ state: stateA, pane: paneA, model: MODELS[modelKeyA] }];
-
-paneA.applyReset.addEventListener("click", () => {
-  stateA.applyPrompt(paneA.textarea.value);
-  paneA.clearLog();
-  paneA.refreshPreview();
-});
-
-let meterA = null;
-let meterB = null;
-
-function attachMeter(pane, state, modelKey) {
+function createOrUpdatePane(modelKey) {
+  if (activePaneMap[modelKey]) return;
+  const state = createPaneState(getSystemPromptBody());
+  const pane  = createPane({
+    id:              modelKey,
+    container:       $paneContainer,
+    initialPrompt:   getSystemPromptBody(),
+    modelKeys:       [modelKey],
+    initialModelKey: modelKey,
+  });
+  pane.applyReset.addEventListener("click", () => {
+    state.applyPrompt(pane.getSystemPrompt());
+    pane.clearLog();
+    pane.refreshPreview();
+  });
   const meter = createMeter({
     pane,
     state,
-    contextWindow: MODELS[modelKey].contextWindow,
-    getDraftText: () => $input.value,
+    contextWindow: ALL_MODELS[modelKey].contextWindow,
+    getDraftText:  () => $input.value,
   });
   pane.onUsage = (usage) => {
-    if (typeof usage.prompt_tokens === "number") {
-      meter.setExactPromptTokens(usage.prompt_tokens);
-    }
+    if (typeof usage.prompt_tokens === "number") meter.setExactPromptTokens(usage.prompt_tokens);
   };
-  return meter;
+  activePaneMap[modelKey] = { state, pane, meter };
 }
 
-// Shared controls
-const $input        = document.getElementById("input");
-const $send         = document.getElementById("send");
-const $newSession   = document.getElementById("new-session");
-const $useVault     = document.getElementById("use-vault");
-const $topK         = document.getElementById("top-k");
-const $reindex      = document.getElementById("reindex");
-const $vaultStatus  = document.getElementById("vault-status");
-const $vaultHealth  = document.getElementById("vault-health");
+function removePane(modelKey) {
+  const entry = activePaneMap[modelKey];
+  if (!entry) return;
+  entry.pane.section.remove();
+  entry.meter?.destroy();
+  delete activePaneMap[modelKey];
+}
 
-let activeSessionId = null;
+function syncPanes() {
+  const desired = new Set(selectedModelKeys);
+  for (const key of Object.keys(activePaneMap)) {
+    if (!desired.has(key)) removePane(key);
+  }
+  for (const key of desired) {
+    createOrUpdatePane(key);
+  }
+}
 
-meterA = attachMeter(paneA, stateA, modelKeyA);
+function activePanes() {
+  return Object.entries(activePaneMap).map(([modelKey, { state, pane }]) => ({
+    state,
+    pane,
+    model: ALL_MODELS[modelKey],
+  }));
+}
 
-paneA.onModelChange((newKey) => {
-  modelKeyA = newKey;
-  meterA.updateContextWindow(MODELS[newKey].contextWindow);
+// ── Prompt picker ───────────────────────────────────────
+function populatePromptPicker(prompts) {
+  $promptPicker.innerHTML = "";
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = "— no prompt selected —";
+  $promptPicker.appendChild(none);
+  for (const p of prompts) {
+    const opt = document.createElement("option");
+    opt.value       = `${p.id}|${p.version}`;
+    opt.textContent = `${p.id}  v${p.version}`;
+    $promptPicker.appendChild(opt);
+  }
+}
+
+function applyPromptToAllPanes(prompt) {
+  activePrompt = prompt;
+  const body = prompt?.body ?? "";
+  for (const { pane } of Object.values(activePaneMap)) {
+    pane.setSystemPrompt(body);
+    pane.applyReset.click();
+  }
+  updatePromptBadges(prompt);
+  registryPanel.setPrompt(prompt);
+}
+
+function updatePromptBadges(prompt) {
+  $promptBadges.innerHTML = "";
+  if (!prompt) return;
+  const vBadge = document.createElement("span");
+  vBadge.className   = "rail-prompt-badge version";
+  vBadge.textContent = `v${prompt.version}`;
+  const eBadge = document.createElement("span");
+  eBadge.className   = `rail-prompt-badge eval ${prompt.eval_status === "validated" ? "validated" : ""}`;
+  eBadge.textContent = `eval: ${prompt.eval_status ?? "pending"}`;
+  $promptBadges.append(vBadge, eBadge);
+}
+
+$promptPicker.addEventListener("change", () => {
+  const val = $promptPicker.value;
+  if (!val) { applyPromptToAllPanes(null); return; }
+  const [id, version] = val.split("|");
+  const prompt = registryPrompts.find(p => p.id === id && p.version === version);
+  if (prompt) applyPromptToAllPanes(prompt);
+});
+
+async function loadRegistryPrompts() {
   try {
-    localStorage.setItem("promptSandbox.modelKey", newKey);
-  } catch { /* storage disabled — in-session change still works */ }
-});
-
-// ── New UI refs ──────────────────────────────────────────
-const $segSingle     = document.getElementById("seg-single");
-const $segCompare    = document.getElementById("seg-compare");
-const $stopBoth      = document.getElementById("stop-both");
-const $exportBtn     = document.getElementById("export-btn");
-const $composerLabel = document.getElementById("composer-label");
-const $sendHint      = document.getElementById("send-hint");
-const $topbarSession = document.getElementById("topbar-session");
-const $topbarSubtitle = document.getElementById("topbar-subtitle");
-const $topbarDots    = document.getElementById("topbar-dots");
-const $railModeTag   = document.getElementById("rail-mode-tag");
-const $sessionsList  = document.getElementById("sessions-list");
-const $vaultCardSub  = document.getElementById("vault-card-sub");
-const $vaultCheckVisual = document.getElementById("vault-checkbox-visual");
-
-function syncVaultCheckbox() {
-  $vaultCheckVisual.classList.toggle("checked", $useVault.checked);
+    registryPrompts = await api.fetchPrompts();
+    populatePromptPicker(registryPrompts);
+  } catch { /* server may not be running */ }
 }
-$useVault.addEventListener("change", syncVaultCheckbox);
-document.getElementById("vault-label-wrap").addEventListener("click", () => {
-  $useVault.checked = !$useVault.checked;
-  syncVaultCheckbox();
-});
-syncVaultCheckbox();
 
+// ── Tab switching ───────────────────────────────────────
+function switchTab(tab) {
+  const isRegistry = tab === "registry";
+  $paneContainer.style.display      = isRegistry ? "none" : "";
+  $composer.style.display           = isRegistry ? "none" : "";
+  $registryPanelMount.style.display = isRegistry ? "none" : "";
+  $registryFrame.style.display      = isRegistry ? "block" : "none";
+  $tabEval.classList.toggle("seg-active",     !isRegistry);
+  $tabRegistry.classList.toggle("seg-active",  isRegistry);
+}
+
+$tabEval.addEventListener("click",     () => switchTab("eval"));
+$tabRegistry.addEventListener("click", () => switchTab("registry"));
+
+window.addEventListener("message", (e) => {
+  if (e.data?.type !== "loadPrompt") return;
+  const { id, version } = e.data;
+  const prompt = registryPrompts.find(p => p.id === id && p.version === version);
+  if (prompt) {
+    switchTab("eval");
+    $promptPicker.value = `${id}|${version}`;
+    applyPromptToAllPanes(prompt);
+  }
+});
+
+// ── Registry actions ────────────────────────────────────
+async function handleSaveDraft() {
+  if (!activePrompt) { alert("Select a registry prompt first."); return; }
+  const body = Object.values(activePaneMap)[0]?.pane.getSystemPrompt() ?? activePrompt.body;
+  try {
+    const result = await api.saveDraftPrompt(activePrompt.id, body);
+    $vaultStatus.textContent = `Draft saved as v${result.version}`;
+    setTimeout(() => { $vaultStatus.textContent = ""; }, 4000);
+    await loadRegistryPrompts();
+  } catch (err) {
+    $vaultStatus.textContent = `Draft save failed: ${err.message}`;
+    setTimeout(() => { $vaultStatus.textContent = ""; }, 5000);
+  }
+}
+
+async function handleValidate() {
+  if (!activePrompt) return;
+  const ok = confirm(`Mark ${activePrompt.id} v${activePrompt.version} as validated?`);
+  if (!ok) return;
+  try {
+    await api.validatePrompt(activePrompt.id, activePrompt.version);
+    $vaultStatus.textContent = "Marked as validated ✓";
+    setTimeout(() => { $vaultStatus.textContent = ""; }, 3000);
+    await loadRegistryPrompts();
+    const updated = registryPrompts.find(p => p.id === activePrompt.id && p.version === activePrompt.version);
+    if (updated) { activePrompt = updated; registryPanel.setPrompt(updated); }
+  } catch (err) {
+    $vaultStatus.textContent = `Validate failed: ${err.message}`;
+    setTimeout(() => { $vaultStatus.textContent = ""; }, 5000);
+  }
+}
+
+// ── Send / stream ───────────────────────────────────────
 async function handleSend() {
   if ($send.disabled) return;
   const text = $input.value.trim();
   if (!text) return;
   $input.value = "";
-
   $send.disabled        = true;
   $send.textContent     = "Streaming…";
-  $sendHint.textContent = "esc to cancel";
   $topbarDots.hidden    = false;
   $topbarSubtitle.textContent = "streaming";
-  if (paneB) $stopBoth.hidden = false;
+  $stopBtn.hidden       = false;
 
   try {
     await sendToPanes({
@@ -136,46 +257,37 @@ async function handleSend() {
   } finally {
     $send.disabled        = false;
     $send.textContent     = "SEND ↵";
-    $sendHint.textContent = "shift+↵ newline";
     $topbarDots.hidden    = true;
     $topbarSubtitle.textContent = "conversation";
-    $stopBoth.hidden      = true;
+    $stopBtn.hidden       = true;
   }
 }
 
 $send.addEventListener("click", handleSend);
 $input.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey) {
-    e.preventDefault();
-    handleSend();
-  }
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
 });
-
 $input.addEventListener("input", () => {
-  meterA?.render();
-  meterB?.render();
+  for (const { meter } of Object.values(activePaneMap)) meter?.render();
 });
 
-function resetToNewSession() {
-  for (const { state, pane } of activePanes()) {
-    state.reset();
-    pane.clearLog();
-  }
-  $topbarSubtitle.textContent = "empty conversation";
-  $topbarSession.textContent  = "untitled";
-  activeSessionId = null;
-  refreshSessionList();
+// ── Vault ───────────────────────────────────────────────
+function syncVaultCheckbox() {
+  $vaultCheckVisual.classList.toggle("checked", $useVault.checked);
 }
-
-$newSession.addEventListener("click", resetToNewSession);
+$useVault.addEventListener("change", syncVaultCheckbox);
+document.getElementById("vault-label-wrap").addEventListener("click", () => {
+  $useVault.checked = !$useVault.checked;
+  syncVaultCheckbox();
+});
+syncVaultCheckbox();
 
 $reindex.addEventListener("click", async () => {
   $reindex.disabled = true;
   $vaultStatus.textContent = "Reindexing…";
   try {
     const data = await reindexVault();
-    $vaultStatus.textContent =
-      `Indexed: +${data.added} new, ${data.updated} updated, ${data.deleted} deleted (${data.unchanged} unchanged)`;
+    $vaultStatus.textContent = `+${data.added} new, ${data.updated} updated, ${data.deleted} deleted`;
   } catch (err) {
     $vaultStatus.textContent = `Reindex failed: ${err.message}`;
   } finally {
@@ -186,161 +298,97 @@ $reindex.addEventListener("click", async () => {
 
 async function tickVaultHealth() {
   const state = await pingVaultHealth();
-  $vaultHealth.className = `health-dot ${state}`;
-  $vaultHealth.title = state === "ok" ? "Vault search: online" : "Vault search: unreachable";
+  $vaultHealth.className    = `health-dot ${state}`;
   $vaultCardSub.textContent = state === "ok" ? "online" : "unreachable";
 }
 tickVaultHealth();
 setInterval(tickVaultHealth, 10000);
 
-function enterCompare() {
-  if (paneB) return;
-  modelKeyB = modelKeyA;
-  stateB = createPaneState(DEFAULT_SYSTEM_PROMPT);
-  paneB  = createPane({
-    id:              "B",
-    container:       paneContainer,
-    initialPrompt:   DEFAULT_SYSTEM_PROMPT,
-    modelKeys:       Object.keys(MODELS),
-    initialModelKey: modelKeyB,
-    registryPrompts,
-  });
-  paneB.applyReset.addEventListener("click", () => {
-    stateB.applyPrompt(paneB.textarea.value);
-    paneB.clearLog();
-    paneB.refreshPreview();
-  });
-  paneContainer.classList.add("compare");
-
-  $segSingle.classList.remove("seg-active");
-  $segCompare.classList.add("seg-active");
-  $railModeTag.textContent = "compare";
-  $composerLabel.textContent = "both ⇢";
-
-  meterB = attachMeter(paneB, stateB, modelKeyB);
-  paneB.onModelChange((newKey) => {
-    modelKeyB = newKey;
-    meterB.updateContextWindow(MODELS[newKey].contextWindow);
-  });
-}
-
-function exitCompare() {
-  if (!paneB) return;
-  if (stateB.messages.length > 1) {
-    const ok = confirm("Exit compare mode? Pane B's conversation will be discarded.");
-    if (!ok) return;
-  }
-  paneB.section.remove();
-  meterB?.destroy();
-  meterB    = null;
-  paneB     = null;
-  stateB    = null;
-  modelKeyB = null;
-  paneContainer.classList.remove("compare");
-
-  $segCompare.classList.remove("seg-active");
-  $segSingle.classList.add("seg-active");
-  $railModeTag.textContent = "v2";
-  $composerLabel.textContent = "you";
-}
-
-$segSingle.addEventListener("click",  () => { if (paneB)  exitCompare(); });
-$segCompare.addEventListener("click", () => { if (!paneB) enterCompare(); });
-
-const sessionsStore = createSessionsStore();
-
-function autoName() {
-  for (const { state } of activePanes()) {
-    const firstUser = state.messages.find(m => m.role === "user");
-    if (firstUser) {
-      const raw = firstUser.content.trim().split("\n", 1)[0];
-      if (raw.length <= 40) return raw;
-      const cut = raw.slice(0, 40);
-      const lastSpace = cut.lastIndexOf(" ");
-      return lastSpace > 10 ? cut.slice(0, lastSpace) : cut;
-    }
-  }
-  return `Untitled ${new Date().toISOString().slice(0, 16).replace("T", " ")}`;
-}
-
+// ── Sessions ─────────────────────────────────────────────
 function currentSnapshot() {
-  const perPaneKey = [modelKeyA, modelKeyB];
-  const panes = activePanes().map(({ state }, idx) => ({
+  const panes = Object.entries(activePaneMap).map(([modelKey, { state }]) => ({
     systemPrompt: state.systemPrompt,
     messages:     [...state.messages],
-    modelKey:     perPaneKey[idx],
+    modelKey,
   }));
   const vaultConfig = {
     enabled: $useVault.checked,
     topK:    Math.max(1, Math.min(20, parseInt($topK.value, 10) || 5)),
   };
-  return { panes, vaultConfig };
+  return {
+    panes,
+    vaultConfig,
+    promptRef: activePrompt ? { id: activePrompt.id, version: activePrompt.version } : null,
+    models:    [...selectedModelKeys],
+  };
+}
+
+function autoName() {
+  for (const { state } of Object.values(activePaneMap)) {
+    const first = state.messages.find(m => m.role === "user");
+    if (first) {
+      const raw  = first.content.trim().split("\n", 1)[0];
+      if (raw.length <= 40) return raw;
+      const cut  = raw.slice(0, 40);
+      const last = cut.lastIndexOf(" ");
+      return last > 10 ? cut.slice(0, last) : cut;
+    }
+  }
+  return `Untitled ${new Date().toISOString().slice(0, 16).replace("T", " ")}`;
+}
+
+function resetToNewSession() {
+  for (const { state, pane } of Object.values(activePaneMap)) {
+    state.reset();
+    pane.clearLog();
+  }
+  activeSessionId = null;
+  $topbarSubtitle.textContent = "empty";
+  $topbarSession.textContent  = "untitled";
+  refreshSessionList();
 }
 
 function loadEntry(entry) {
-  const paneCount = entry.panes.length;
-  const modelKeys = Object.keys(MODELS);
-  const fallback  = getActiveModelKey();
+  const { promptRef, models, panes, vaultConfig } = resolveSession(entry);
 
-  const keyA = resolveModelKey(entry.panes[0].modelKey, modelKeys, fallback);
-  const keyB = paneCount > 1
-    ? resolveModelKey(entry.panes[1].modelKey, modelKeys, fallback)
-    : null;
-
-  if (paneCount === 1) {
-    if (paneB && stateB && stateB.messages.length > 1) {
-      const ok = confirm("Loading this session will exit compare mode and discard Pane B's conversation. Continue?");
-      if (!ok) return;
-    }
-    if (paneB) {
-      stateB.loadSnapshot({
-        systemPrompt: stateB.systemPrompt,
-        messages: [{ role: "system", content: stateB.systemPrompt }],
+  if (models.length) {
+    const valid = models.filter(k => ALL_MODELS[k]);
+    if (valid.length) {
+      selectedModelKeys = new Set(valid);
+      $modelChecklist.innerHTML = "";
+      createModelSelector({
+        container:   $modelChecklist,
+        models:      ALL_MODELS,
+        initialKeys: [...selectedModelKeys],
+        onChange(keys) { selectedModelKeys = keys; syncPanes(); },
       });
-      exitCompare();
+      syncPanes();
     }
-    stateA.loadSnapshot({
-      systemPrompt: entry.panes[0].systemPrompt,
-      messages: [...entry.panes[0].messages],
-    });
-    paneA.textarea.value = entry.panes[0].systemPrompt;
-    paneA.refreshPreview();
-    paneA.renderFromMessages(stateA.messages);
-
-    modelKeyA = keyA;
-    paneA.setModelKey(keyA);
-    meterA.updateContextWindow(MODELS[keyA].contextWindow);
-    try { localStorage.setItem("promptSandbox.modelKey", keyA); } catch { /* ignore */ }
-  } else {
-    if (!paneB) enterCompare();
-    stateA.loadSnapshot({
-      systemPrompt: entry.panes[0].systemPrompt,
-      messages: [...entry.panes[0].messages],
-    });
-    paneA.textarea.value = entry.panes[0].systemPrompt;
-    paneA.refreshPreview();
-    paneA.renderFromMessages(stateA.messages);
-
-    stateB.loadSnapshot({
-      systemPrompt: entry.panes[1].systemPrompt,
-      messages: [...entry.panes[1].messages],
-    });
-    paneB.textarea.value = entry.panes[1].systemPrompt;
-    paneB.refreshPreview();
-    paneB.renderFromMessages(stateB.messages);
-
-    modelKeyA = keyA;
-    paneA.setModelKey(keyA);
-    meterA.updateContextWindow(MODELS[keyA].contextWindow);
-    try { localStorage.setItem("promptSandbox.modelKey", keyA); } catch { /* ignore */ }
-
-    modelKeyB = keyB;
-    paneB.setModelKey(keyB);
-    meterB.updateContextWindow(MODELS[keyB].contextWindow);
   }
 
-  $useVault.checked = !!entry.vaultConfig?.enabled;
-  $topK.value       = String(entry.vaultConfig?.topK ?? 5);
+  if (promptRef) {
+    const prompt = registryPrompts.find(p => p.id === promptRef.id && p.version === promptRef.version);
+    if (prompt) {
+      $promptPicker.value = `${promptRef.id}|${promptRef.version}`;
+      applyPromptToAllPanes(prompt);
+    }
+  }
+
+  for (const saved of panes) {
+    const modelKey = saved.modelKey;
+    if (!modelKey || !activePaneMap[modelKey]) continue;
+    const { state, pane } = activePaneMap[modelKey];
+    state.loadSnapshot({
+      systemPrompt: saved.systemPrompt ?? getSystemPromptBody(),
+      messages:     [...saved.messages],
+    });
+    pane.textarea.value = saved.systemPrompt ?? getSystemPromptBody();
+    pane.refreshPreview();
+    pane.renderFromMessages(state.messages);
+  }
+
+  $useVault.checked = !!vaultConfig?.enabled;
+  $topK.value       = String(vaultConfig?.topK ?? 5);
   syncVaultCheckbox();
 }
 
@@ -349,11 +397,12 @@ async function refreshSessionList() {
     activeId: activeSessionId,
     onClick: async (entry) => {
       activeSessionId = entry.id;
+      $topbarSession.textContent = entry.name;
       loadEntry(entry);
       refreshSessionList();
     },
     onDelete: async (entry) => {
-      const ok = confirm(`Delete '${entry.name}'? This cannot be undone.`);
+      const ok = confirm(`Delete '${entry.name}'?`);
       if (!ok) return;
       await sessionsStore.delete(entry.id);
       if (activeSessionId === entry.id) activeSessionId = null;
@@ -362,78 +411,74 @@ async function refreshSessionList() {
   });
 }
 
+$newSession.addEventListener("click", resetToNewSession);
+
+$saveSessionBtn.addEventListener("click", async () => {
+  const name = autoName();
+  try {
+    const snap  = currentSnapshot();
+    const entry = await sessionsStore.save({
+      name,
+      panes:      snap.panes,
+      vaultConfig: snap.vaultConfig,
+      promptRef:  snap.promptRef,
+      models:     snap.models,
+    });
+    activeSessionId = entry.id;
+    $topbarSession.textContent = name;
+    refreshSessionList();
+  } catch (err) {
+    $vaultStatus.textContent = `Save failed: ${err.message}`;
+    setTimeout(() => { $vaultStatus.textContent = ""; }, 5000);
+  }
+});
+
 renderSaveSlot(document.getElementById("sessions-save-slot"), {
   defaultName: autoName,
   onSave: async (name) => {
     try {
-      const { panes, vaultConfig } = currentSnapshot();
-      const entry = await sessionsStore.save({ name, panes, vaultConfig });
+      const snap  = currentSnapshot();
+      const entry = await sessionsStore.save({
+        name,
+        panes:      snap.panes,
+        vaultConfig: snap.vaultConfig,
+        promptRef:  snap.promptRef,
+        models:     snap.models,
+      });
       activeSessionId = entry.id;
       refreshSessionList();
     } catch (err) {
       $vaultStatus.textContent = `Save failed: ${err.message}`;
-      setTimeout(() => { $vaultStatus.textContent = ""; }, 6000);
+      setTimeout(() => { $vaultStatus.textContent = ""; }, 5000);
     }
   },
 });
 
-document.getElementById("export-draft-btn").addEventListener("click", () => {
-  const snapshot = currentSnapshot();
-  const name     = autoName();
-  let draft;
-  try {
-    draft = exportToRegistryDraft({ name, ...snapshot });
-  } catch (err) {
-    $vaultStatus.textContent = `Export failed: ${err.message}`;
-    setTimeout(() => { $vaultStatus.textContent = ""; }, 5000);
-    return;
-  }
-  const blob = new Blob([JSON.stringify(draft, null, 2)], { type: "application/json" });
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement("a");
-  a.href     = url;
-  a.download = `${slugify(name)}-draft.json`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-});
-
 $exportBtn.addEventListener("click", () => {
-  const snapshot = currentSnapshot();
-  const name     = autoName();
-  const markdown = buildMarkdown(snapshot, name);
+  const snap = currentSnapshot();
+  const name = autoName();
+  const markdown = buildMarkdown({ panes: snap.panes, vaultConfig: snap.vaultConfig }, name);
   const date     = new Date().toISOString().slice(0, 10);
-  triggerMarkdownDownload({
-    filename: `${slugify(name)}-${date}.md`,
-    markdown,
-  });
+  triggerMarkdownDownload({ filename: `${slugify(name)}-${date}.md`, markdown });
 });
-
-loadRegistryPrompts();
-refreshSessionList();
 
 // ── Keyboard shortcuts ───────────────────────────────────
 document.addEventListener("keydown", (e) => {
-  if (e.key === "n" && (e.metaKey || e.ctrlKey) && !e.shiftKey) {
-    e.preventDefault();
-    resetToNewSession();
-  }
-
-  if ((e.key === "\\" || (e.key === "c" && e.shiftKey)) && (e.metaKey || e.ctrlKey)) {
-    e.preventDefault();
-    if (paneB) exitCompare(); else enterCompare();
-  }
-
+  if (e.key === "n" && (e.metaKey || e.ctrlKey) && !e.shiftKey) { e.preventDefault(); resetToNewSession(); }
   if (e.key === "k" && (e.metaKey || e.ctrlKey) && !e.shiftKey) {
     e.preventDefault();
     const firstRow = $sessionsList.querySelector(".rail-session-row");
     if (firstRow) firstRow.focus();
   }
-
   if (e.key === "v" && (e.metaKey || e.ctrlKey) && e.shiftKey) {
     e.preventDefault();
     $useVault.checked = !$useVault.checked;
     syncVaultCheckbox();
   }
 });
+
+// ── Boot ─────────────────────────────────────────────────
+switchTab("eval");
+syncPanes();
+loadRegistryPrompts();
+refreshSessionList();

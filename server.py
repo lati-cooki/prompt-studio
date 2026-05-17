@@ -171,7 +171,7 @@ def _seed_prompts_from_index(conn):
     except Exception:
         return
     owner = index.get("owner", "")
-    now = "strftime('%Y-%m-%dT%H:%M:%SZ','now')"
+    params = []
     for p in index.get("prompts", []):
         body = ""
         fpath = p.get("file")
@@ -182,8 +182,19 @@ def _seed_prompts_from_index(conn):
                     body = bf.read()
             except FileNotFoundError:
                 pass
+        params.append((
+            p.get("id"), p.get("version"), p.get("status"),
+            p.get("tier"), owner, body, p.get("use_case"),
+            p.get("cost_per_run_usd"), p.get("tokens_prompt_body"),
+            p.get("default_model"), p.get("eval_status"),
+            p.get("file"), p.get("notes"),
+            json.dumps(p.get("composes", [])),
+            json.dumps(p.get("tested_on", [])),
+        ))
+
+    if params:
         try:
-            conn.execute(
+            conn.executemany(
                 """INSERT OR IGNORE INTO prompts
                    (id, version, status, tier, owner, body, use_case,
                     cost_per_run_usd, tokens_prompt_body, default_model,
@@ -192,19 +203,11 @@ def _seed_prompts_from_index(conn):
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
                    strftime('%Y-%m-%dT%H:%M:%SZ','now'),
                    strftime('%Y-%m-%dT%H:%M:%SZ','now'))""",
-                (
-                    p.get("id"), p.get("version"), p.get("status"),
-                    p.get("tier"), owner, body, p.get("use_case"),
-                    p.get("cost_per_run_usd"), p.get("tokens_prompt_body"),
-                    p.get("default_model"), p.get("eval_status"),
-                    p.get("file"), p.get("notes"),
-                    json.dumps(p.get("composes", [])),
-                    json.dumps(p.get("tested_on", [])),
-                )
+                params
             )
+            conn.commit()
         except Exception:
             pass
-    conn.commit()
 
 
 def init_db():

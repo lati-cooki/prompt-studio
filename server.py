@@ -123,33 +123,36 @@ def migrate_sessions(conn):
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_sessions_created_at ON sessions (created_at DESC)"
         )
-        for row in old_rows:
-            d = dict(zip(col_names, row))
-            row_id   = str(d.get('id', ''))
-            name     = d.get('name', 'Untitled')
-            created  = str(d.get('created_at') or d.get('createdAt') or '')
-            updated  = str(d.get('updated_at') or d.get('updatedAt') or created)
-            # Old schema stored everything in a 'data' JSON blob
-            raw_data = d.get('data') or d.get('panes') or '[]'
-            try:
-                parsed = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
-            except Exception:
-                parsed = []
-            if isinstance(parsed, dict):
-                vault_cfg = json.dumps(parsed.get('vaultConfig') or parsed.get('vault') or {})
-                panes_val = json.dumps(parsed.get('panes', []))
-            else:
-                vault_cfg = '{}'
-                panes_val = json.dumps(parsed)
-            if not row_id or not created:
-                continue
-            try:
-                conn.execute(
-                    "INSERT OR IGNORE INTO sessions (id, name, created_at, updated_at, panes, vault_config) VALUES (?,?,?,?,?,?)",
-                    (row_id, name, created, updated, panes_val, vault_cfg)
-                )
-            except Exception:
-                pass
+        def iter_values():
+            for row in old_rows:
+                d = dict(zip(col_names, row))
+                row_id   = str(d.get('id', ''))
+                name     = d.get('name', 'Untitled')
+                created  = str(d.get('created_at') or d.get('createdAt') or '')
+                updated  = str(d.get('updated_at') or d.get('updatedAt') or created)
+                # Old schema stored everything in a 'data' JSON blob
+                raw_data = d.get('data') or d.get('panes') or '[]'
+                try:
+                    parsed = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
+                except Exception:
+                    parsed = []
+                try:
+                    if isinstance(parsed, dict):
+                        vault_cfg = json.dumps(parsed.get('vaultConfig') or parsed.get('vault') or {})
+                        panes_val = json.dumps(parsed.get('panes', []))
+                    else:
+                        vault_cfg = '{}'
+                        panes_val = json.dumps(parsed)
+                except Exception:
+                    continue
+                if not row_id or not created:
+                    continue
+                yield (row_id, name, created, updated, panes_val, vault_cfg)
+
+        conn.executemany(
+            "INSERT OR IGNORE INTO sessions (id, name, created_at, updated_at, panes, vault_config) VALUES (?,?,?,?,?,?)",
+            iter_values()
+        )
         conn.commit()
     except Exception:
         conn.rollback()

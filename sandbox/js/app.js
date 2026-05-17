@@ -13,6 +13,7 @@ import * as api from "./api.js";
 
 // ── State ──────────────────────────────────────────────
 let registryPrompts   = [];
+let registryPromptsMap = new Map();
 let activePrompt      = null;
 let activePaneMap     = {};   // modelKey → { state, pane, meter }
 let activeSessionId   = null;
@@ -202,13 +203,17 @@ $promptPicker.addEventListener("change", () => {
   const val = $promptPicker.value;
   if (!val) { applyPromptToAllPanes(null); return; }
   const [id, version] = val.split("|");
-  const prompt = registryPrompts.find(p => p.id === id && p.version === version);
+  const prompt = registryPromptsMap.get(`${id}|${version}`);
   if (prompt) applyPromptToAllPanes(prompt);
 });
 
 async function loadRegistryPrompts() {
   try {
     registryPrompts = await api.fetchPrompts();
+    registryPromptsMap.clear();
+    for (const p of registryPrompts) {
+      registryPromptsMap.set(`${p.id}|${p.version}`, p);
+    }
     populatePromptPicker(registryPrompts);
   } catch { /* server may not be running */ }
 }
@@ -230,7 +235,7 @@ $tabRegistry.addEventListener("click", () => switchTab("registry"));
 window.addEventListener("message", (e) => {
   if (e.data?.type !== "loadPrompt") return;
   const { id, version } = e.data;
-  const prompt = registryPrompts.find(p => p.id === id && p.version === version);
+  const prompt = registryPromptsMap.get(`${id}|${version}`);
   if (prompt) {
     switchTab("eval");
     $promptPicker.value = `${id}|${version}`;
@@ -262,7 +267,7 @@ async function handleValidate() {
     $vaultStatus.textContent = "Marked as validated ✓";
     setTimeout(() => { $vaultStatus.textContent = ""; }, 3000);
     await loadRegistryPrompts();
-    const updated = registryPrompts.find(p => p.id === activePrompt.id && p.version === activePrompt.version);
+    const updated = registryPromptsMap.get(`${activePrompt.id}|${activePrompt.version}`);
     if (updated) { activePrompt = updated; registryPanel.setPrompt(updated); }
   } catch (err) {
     $vaultStatus.textContent = `Validate failed: ${err.message}`;
@@ -396,7 +401,7 @@ function loadEntry(entry) {
   }
 
   if (promptRef) {
-    const prompt = registryPrompts.find(p => p.id === promptRef.id && p.version === promptRef.version);
+    const prompt = registryPromptsMap.get(`${promptRef.id}|${promptRef.version}`);
     if (prompt) {
       $promptPicker.value = `${promptRef.id}|${promptRef.version}`;
       applyPromptToAllPanes(prompt);

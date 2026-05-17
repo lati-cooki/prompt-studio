@@ -265,7 +265,12 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         elif self.path in ('/registry', '/registry/'):
             self.serve_file('registry/interface/registry_widget.html', 'text/html')
         elif self.path.startswith('/js/'):
-            self.serve_file('sandbox' + self.path, 'application/javascript')
+            # Only serve files from sandbox/js/
+            js_path = self.path.removeprefix('/js/').lstrip('/')
+            if not js_path:
+                self.send_error(404)
+                return
+            self.serve_file(os.path.join('sandbox', 'js', js_path), 'application/javascript')
         else:
             self.send_error(404)
 
@@ -291,15 +296,32 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
 
     def serve_file(self, path, content_type=None):
         try:
-            with open(path, 'rb') as f:
+            # Secure path resolution: ensure the path stays within allowed subdirectories
+            base_dir = os.path.abspath(os.path.dirname(__file__))
+            requested_path = os.path.abspath(os.path.join(base_dir, path))
+
+            allowed_subdirs = [
+                os.path.abspath(os.path.join(base_dir, 'sandbox')),
+                os.path.abspath(os.path.join(base_dir, 'registry'))
+            ]
+
+            try:
+                if not any(os.path.commonpath([d, requested_path]) == d for d in allowed_subdirs):
+                    self.send_error(404, f"File not found: {path}")
+                    return
+            except ValueError:
+                self.send_error(404, f"File not found: {path}")
+                return
+
+            with open(requested_path, 'rb') as f:
                 data = f.read()
-            mime = content_type or mimetypes.guess_type(path)[0] or 'application/octet-stream'
+            mime = content_type or mimetypes.guess_type(requested_path)[0] or 'application/octet-stream'
             self.send_response(200)
             self.send_header('Content-Type', mime)
             self.send_header('Content-Length', str(len(data)))
             self.end_headers()
             self.wfile.write(data)
-        except FileNotFoundError:
+        except (FileNotFoundError, IsADirectoryError, PermissionError):
             self.send_error(404, f"File not found: {path}")
 
     def do_POST(self):

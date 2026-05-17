@@ -227,6 +227,7 @@ def init_db():
         conn.close()
 
 class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
+    _anthropic_clients = {}
     def end_headers(self):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
@@ -631,7 +632,10 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         user_msgs   = [m for m in messages if m.get('role') != 'system']
         system = "\n\n".join(m['content'] for m in system_msgs) if system_msgs else ''
 
-        client = anthropic.Anthropic(api_key=api_key)
+        if api_key not in self._anthropic_clients:
+            self._anthropic_clients[api_key] = anthropic.Anthropic(api_key=api_key)
+        client = self._anthropic_clients[api_key]
+
         self.send_response(200)
         self.send_header('Content-Type', 'text/event-stream')
         self.send_header('Cache-Control', 'no-cache')

@@ -85,6 +85,7 @@ export function renderExportSlot(slot, { onExport }) {
 }
 
 export function slugify(name) {
+  if (typeof name !== "string") return "prompt-sandbox";
   return name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")

@@ -265,15 +265,22 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
     def do_HEAD(self):
         self.send_error(404)
 
+    _cached_index_html = None
+
     def serve_sandbox_index(self):
         """Serve index.html with LM_STUDIO_URL injected from environment."""
         try:
-            with open('sandbox/index.html', 'rb') as f:
-                data = f.read()
-            lm_url = os.environ.get('LM_STUDIO_URL', '')
-            if lm_url:
-                inject = f'<script>window.LM_STUDIO_URL="{lm_url}";</script>'.encode()
-                data = data.replace(b'<script type="module"', inject + b'<script type="module"', 1)
+            if self.__class__._cached_index_html is None:
+                with open('sandbox/index.html', 'rb') as f:
+                    data = f.read()
+                lm_url = os.environ.get('LM_STUDIO_URL', '')
+                if lm_url:
+                    inject = f'<script>window.LM_STUDIO_URL="{lm_url}";</script>'.encode()
+                    data = data.replace(b'<script type="module"', inject + b'<script type="module"', 1)
+                self.__class__._cached_index_html = data
+            else:
+                data = self.__class__._cached_index_html
+
             self.send_response(200)
             self.send_header('Content-Type', 'text/html')
             self.send_header('Content-Length', str(len(data)))

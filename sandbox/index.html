@@ -269,6 +269,22 @@ body::after {
 }
 .ghost-btn:hover { color: var(--ink); border-color: rgba(12,15,20,0.28); }
 a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; }
+
+.registry-load {
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.registry-select {
+  max-width: 200px;
+  background: var(--paper); color: var(--ink-2);
+  border: 1px solid var(--line); padding: 5px 8px;
+  font-family: var(--mono); font-size: 10px;
+  letter-spacing: 0.02em; cursor: pointer;
+}
+.registry-select:focus { outline: none; border-color: var(--teal); }
+.registry-status {
+  font-family: var(--mono); font-size: 9.5px; color: var(--ink-4);
+  max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .stop-btn {
   background: transparent; border: 1px solid var(--red); color: var(--red);
   padding: 5px 11px; font-family: var(--mono); font-size: 10.5px;
@@ -671,6 +687,13 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
           <span class="seg-dot-a"></span><span class="seg-dot-b"></span>Compare A / B
         </button>
       </div>
+      <div class="registry-load" title="Load system prompt from registry">
+        <select id="registry-prompt-select" class="registry-select" aria-label="Registry prompt">
+          <option value="">Load from registry…</option>
+        </select>
+        <button type="button" class="ghost-btn" id="registry-load-btn">Load</button>
+      </div>
+      <span class="registry-status" id="registry-status" hidden></span>
       <a class="ghost-btn" href="/registry">Registry</a>
       <button class="ghost-btn" id="export-btn">Export .md</button>
       <button class="stop-btn" id="stop-both" hidden>⏹ Stop both</button>

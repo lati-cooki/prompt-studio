@@ -7,6 +7,11 @@ import { renderSaveSlot, renderSessionList }    from "./session-rail.js";
 import { buildMarkdown, triggerMarkdownDownload, slugify } from "./export.js";
 import { createSessionsStore, resolveModelKey } from "./sessions.js";
 import { createMeter }                          from "./meter.js";
+import {
+  fetchRegistryIndex,
+  loadRegistryPromptBody,
+  listLoadablePrompts,
+} from "./registry.js";
 
 const paneContainer = document.getElementById("pane-container");
 const stateA = createPaneState(DEFAULT_SYSTEM_PROMPT);
@@ -80,6 +85,9 @@ const $segSingle     = document.getElementById("seg-single");
 const $segCompare    = document.getElementById("seg-compare");
 const $stopBoth      = document.getElementById("stop-both");
 const $exportBtn     = document.getElementById("export-btn");
+const $registrySelect = document.getElementById("registry-prompt-select");
+const $registryLoadBtn = document.getElementById("registry-load-btn");
+const $registryStatus  = document.getElementById("registry-status");
 const $composerLabel = document.getElementById("composer-label");
 const $sendHint      = document.getElementById("send-hint");
 const $topbarSession = document.getElementById("topbar-session");
@@ -373,6 +381,76 @@ $exportBtn.addEventListener("click", () => {
     markdown,
   });
 });
+
+function showRegistryStatus(msg, isError = false) {
+  $registryStatus.hidden = false;
+  $registryStatus.textContent = msg;
+  $registryStatus.style.color = isError ? "var(--red)" : "";
+  if (!isError) {
+    setTimeout(() => { $registryStatus.hidden = true; }, 5000);
+  }
+}
+
+function paneHasConversation(state) {
+  return state.messages.some((m) => m.role === "user" || m.role === "assistant");
+}
+
+function applyRegistryPromptToPane(state, pane, body) {
+  state.applyPrompt(body);
+  pane.textarea.value = body;
+  pane.refreshPreview();
+  pane.clearLog();
+}
+
+async function populateRegistrySelect() {
+  try {
+    const prompts = listLoadablePrompts(await fetchRegistryIndex());
+    $registrySelect.innerHTML = '<option value="">Load from registry…</option>';
+    for (const p of prompts) {
+      const opt = document.createElement("option");
+      opt.value = p.file;
+      opt.textContent = `${p.id}@${p.version}`;
+      if (p.use_case) opt.title = p.use_case;
+      $registrySelect.appendChild(opt);
+    }
+  } catch (err) {
+    $registrySelect.innerHTML =
+      '<option value="">Registry unavailable</option>';
+    showRegistryStatus(err.message, true);
+  }
+}
+
+async function handleRegistryLoad() {
+  const file = $registrySelect.value;
+  if (!file) return;
+
+  const label = $registrySelect.selectedOptions[0]?.textContent ?? file;
+  const hasChat =
+    paneHasConversation(stateA) || (stateB && paneHasConversation(stateB));
+  if (hasChat) {
+    const ok = confirm(
+      `Load ${label} into pane A? The current conversation will be cleared.`
+    );
+    if (!ok) return;
+  }
+
+  $registryLoadBtn.disabled = true;
+  showRegistryStatus("Loading…");
+  try {
+    const body = await loadRegistryPromptBody(file);
+    applyRegistryPromptToPane(stateA, paneA, body);
+    $topbarSubtitle.textContent = `registry · ${label}`;
+    meterA?.render();
+    showRegistryStatus(`Loaded ${label}`);
+  } catch (err) {
+    showRegistryStatus(err.message, true);
+  } finally {
+    $registryLoadBtn.disabled = false;
+  }
+}
+
+$registryLoadBtn.addEventListener("click", handleRegistryLoad);
+populateRegistrySelect();
 
 refreshSessionList();
 

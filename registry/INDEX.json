@@ -21,6 +21,21 @@
       "notes": "v1.1.0 regression PASS: Opus + Sonnet Step 0 grade A (2026-06-04). Opus fixed v1.0.0 arithmetic miss. GPT/Gemini/Grok re-test optional."
     },
     {
+      "id": "agent_operational_checklist",
+      "version": "1.0.0",
+      "status": "active",
+      "tier": "utility",
+      "cost_per_run_usd": null,
+      "tokens_prompt_body": 650,
+      "default_model": "gemma-4-26b",
+      "tested_on": ["gemma-4-26b"],
+      "eval_status": "unevaluated",
+      "use_case": "Pre-deployment governance checklist for autonomous agents (Clista)",
+      "composes": [],
+      "file": "prompts/agent_operational_checklist_v1_0_0.md",
+      "notes": "Registered from sandbox session sess-1780593640189-2h2wld (2026-06-04). Fixed [s]→[ ] typo on Feedback Loop checkbox."
+    },
+    {
       "id": "consensus_protocol",
       "version": "1.0.0",
       "status": "deprecated",

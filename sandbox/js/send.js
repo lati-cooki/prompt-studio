@@ -115,7 +115,11 @@ async function streamOnePane({ state, pane, model, vaultMessage, vaultResults })
     if (vaultResults) renderSources(bubble, vaultResults);
   } catch (err) {
     bubble.classList.add("error");
-    bubble.textContent = `⚠ ${err.message}`;
+    let msg = err.message;
+    if (msg === "Failed to fetch" || msg.includes("NetworkError")) {
+      msg = `Model server unreachable at ${model.endpoint}. Start MLX (e.g. sandbox/_run-mlx.sh on port 8080) or pick a running model.`;
+    }
+    bubble.textContent = `⚠ ${msg}`;
     state.popLastUser();
   }
 }

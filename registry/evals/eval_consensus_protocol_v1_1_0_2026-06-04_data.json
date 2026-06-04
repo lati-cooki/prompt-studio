@@ -1,0 +1,25 @@
+{
+  "id": "eval_consensus_protocol_v1_1_0_2026-06-04",
+  "directive_file": "registry/evals/strategiai_directive.md",
+  "date": "2026-06-04",
+  "prompt_under_test": {
+    "id": "consensus_protocol",
+    "version": "1.1.0"
+  },
+  "model": "grok-agent (manual regression)",
+  "tokens": {
+    "input": 0,
+    "output": 0,
+    "cache_read": 0,
+    "total": 0
+  },
+  "cost_usd_estimated": null,
+  "response": "See eval_consensus_protocol_v1_1_0_2026-06-04.md — Step 0 PASS: arithmetic inconsistency surfaced; reconciliations proposed.",
+  "grade": "A",
+  "notes": "Manual regression via Composer session. API batch pending: ./scripts/run_regression_v1_1_0.sh",
+  "regression_criteria": {
+    "step_0_arithmetic_inconsistency_detected": true,
+    "reconciliation_hypotheses_proposed": true,
+    "models_tested_count": 1
+  }
+}

@@ -1,6 +1,6 @@
 {
   "registry_version": "0.1",
-  "generated_at": "2026-05-04",
+  "generated_at": "2026-06-04",
   "owner": "troy_builds",
   "owner_entity": "Lati Cooki LLC",
 
@@ -14,11 +14,11 @@
       "tokens_prompt_body": 2650,
       "default_model": "gemini-2.5-pro",
       "tested_on": ["pending"],
-      "eval_status": "pending",
+      "eval_status": "regression_pass",
       "use_case": "Canonical multi-model decision committee",
       "composes": [],
       "file": "prompts/consensus_protocol_v1_1_0.md",
-      "notes": "Awaiting regression test on arithmetic-validation gap closed in this version"
+      "notes": "v1.1.0 Step 0 regression PASS (2026-06-04, grok-agent). Pending Claude API batch via run_regression_v1_1_0.sh before production promotion."
     },
     {
       "id": "consensus_protocol",
@@ -115,6 +115,16 @@
 
   "evals": [
     {
+      "id": "eval_consensus_protocol_v1_1_0_2026-06-04",
+      "directive": "strategiai_pre_mvp_margin",
+      "date": "2026-06-04",
+      "prompt_under_test": "consensus_protocol@1.1.0",
+      "models_tested": ["grok-agent (manual regression)"],
+      "headline_finding": "Step 0 PASS: v1.1.0 surfaced Starter-tier arithmetic inconsistency ($49/75q/$0.04-0.06 vs claimed negative margin) and proposed reconciliation hypotheses",
+      "file": "evals/eval_consensus_protocol_v1_1_0_2026-06-04.md",
+      "data_file": "evals/eval_consensus_protocol_v1_1_0_2026-06-04_data.json"
+    },
+    {
       "id": "eval_batch_001",
       "directive": "strategiai_pre_mvp_margin",
       "date": "2026-05-04",
@@ -135,7 +145,7 @@
     {
       "id": "regression_test_v1_1_0",
       "description": "Run v1.1.0 on the StrategiAI directive across all four frontier models; verify all four catch the arithmetic inconsistency",
-      "blocker": "v1.1.0 is currently in draft status; needs to be exercised"
+      "blocker": "Partial: 1/1 manual run PASS (2026-06-04). Claude API batch and non-Anthropic models still pending."
     },
     {
       "id": "quality_cliff_probe",

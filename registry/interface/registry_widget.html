@@ -277,26 +277,27 @@ select {
     </div>
   </div>
 
-  <div class="info-banner">
-    Standalone snapshot. Action buttons describe what they would do in a connected environment — they do not currently send anything.
+  <div class="info-banner" id="load-banner" style="display:none">
+    Loading registry from <code>/api/registry</code>…
   </div>
+  <div class="info-banner" id="error-banner" style="display:none;color:var(--red)"></div>
 
   <div class="stats">
     <div class="stat">
       <div class="stat-label">Total prompts</div>
-      <div class="stat-val">7</div>
+      <div class="stat-val" id="stat-total">—</div>
     </div>
     <div class="stat">
       <div class="stat-label">In production</div>
-      <div class="stat-val">3</div>
+      <div class="stat-val" id="stat-production">—</div>
     </div>
     <div class="stat">
       <div class="stat-label">Eval coverage</div>
-      <div class="stat-val">57%</div>
+      <div class="stat-val" id="stat-eval">—</div>
     </div>
     <div class="stat">
       <div class="stat-label">Avg cost / run</div>
-      <div class="stat-val">$0.05</div>
+      <div class="stat-val" id="stat-cost">—</div>
     </div>
   </div>
 
@@ -316,26 +317,68 @@ select {
 
   <div id="rows"></div>
 
-  <div class="doc-footer">
-    Built 2026-05-04. No backing store. Action buttons are informational only in this standalone snapshot.<br>
-    To make this live, connect to INDEX.json or a database.
+  <div class="doc-footer" id="doc-footer">
+    Connected to <code>/api/registry</code> (INDEX.json). Start with <code>python3 server.py</code>.
   </div>
 
 </div>
 
 <script>
-const data = [
-  { id: "consensus_protocol", version: "1.1.0", status: "draft", tier: "audit", cost: 0.04, costStr: "~$0.04", tokens: 2650, defaultModel: "gemini-2.5-pro", evalStatus: "pending", useCase: "Canonical multi-model decision committee", composes: [], note: "Awaiting regression test on arithmetic-validation gap" },
-  { id: "consensus_protocol", version: "1.0.0", status: "deprecated", tier: "audit", cost: 0.04, costStr: "~$0.04", tokens: 2400, defaultModel: "gemini-2.5-pro", evalStatus: "batch#1 ✓", useCase: "Prior version; missed input-validation step", composes: [], note: "4-model batch: 2/4 caught arithmetic inconsistency. Reason for v1.1.0." },
-  { id: "committee_review", version: "1.1", status: "production", tier: "audit", cost: 0.09, costStr: "~$0.09", tokens: 2950, defaultModel: "gpt-5.5", evalStatus: "passed", useCase: "Premium 6-lane strategic audit", composes: [], note: "Higher citation-source-tier than consensus_protocol" },
-  { id: "premium_enterprise_review", version: "1.0", status: "active", tier: "audit", cost: 0.18, costStr: "~$0.18", tokens: 4200, defaultModel: "claude-opus-4.7", evalStatus: "passed", useCase: "Enterprise / high-stakes (Opus)", composes: [], note: "Most thorough development per lane; verbose" },
-  { id: "lite_fast_review", version: "1.0", status: "active", tier: "audit", cost: 0.008, costStr: "~$0.008", tokens: 1450, defaultModel: "gemini-2.5-flash", evalStatus: "unevaluated", useCase: "High-volume / fast", composes: [], note: "Quality-cliff probe pending" },
-  { id: "standard_advice", version: "1.0", status: "production", tier: "advisory", cost: 0.002, costStr: "~$0.002", tokens: 420, defaultModel: "claude-haiku-4.5", evalStatus: "passed", useCase: "Fast single-model advice", composes: [], note: "Stable; high invocation count expected" },
-  { id: "industry_playbook_technology", version: "1.0", status: "active", tier: "reference", cost: null, costStr: "—", tokens: null, defaultModel: "—", evalStatus: "n/a", useCase: "Tech few-shot examples (composable)", composes: [], note: "Not runnable standalone; called by other prompts" }
-];
-
+let data = [];
 let activeFilter = "all";
 let activeSort   = "name";
+
+function mapPrompt(p) {
+  const cost = p.cost_per_run_usd;
+  return {
+    id: p.id,
+    version: p.version,
+    status: p.status,
+    tier: p.tier,
+    cost,
+    costStr: cost != null ? `~$${cost}` : "—",
+    tokens: p.tokens_prompt_body,
+    defaultModel: p.default_model || "—",
+    evalStatus: p.eval_status || "—",
+    useCase: p.use_case || "",
+    composes: p.composes || [],
+    note: p.notes || "",
+    file: p.file,
+  };
+}
+
+function updateStats() {
+  const total = data.length;
+  const production = data.filter(d => d.status === "production").length;
+  const evaluated = data.filter(d => d.evalStatus && !["pending", "unevaluated", "n/a"].includes(d.evalStatus)).length;
+  const costs = data.map(d => d.cost).filter(c => c != null);
+  const avgCost = costs.length ? costs.reduce((a, b) => a + b, 0) / costs.length : null;
+
+  document.getElementById("stat-total").textContent = String(total);
+  document.getElementById("stat-production").textContent = String(production);
+  document.getElementById("stat-eval").textContent = total ? `${Math.round((evaluated / total) * 100)}%` : "—";
+  document.getElementById("stat-cost").textContent = avgCost != null ? `$${avgCost.toFixed(2)}` : "—";
+}
+
+async function loadRegistry() {
+  document.getElementById("load-banner").style.display = "block";
+  try {
+    const res = await fetch("/api/registry");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const index = await res.json();
+    data = (index.prompts || []).map(mapPrompt);
+    document.getElementById("doc-footer").textContent =
+      `Registry v${index.registry_version || "?"} · generated ${index.generated_at || "?"} · ${data.length} prompts`;
+    updateStats();
+    render();
+  } catch (err) {
+    document.getElementById("error-banner").textContent =
+      `Failed to load registry: ${err.message}. Is server.py running on port 8000?`;
+    document.getElementById("error-banner").style.display = "block";
+  } finally {
+    document.getElementById("load-banner").style.display = "none";
+  }
+}
 
 function render() {
   let rows = data.filter(d => activeFilter === "all" || d.tier === activeFilter);
@@ -375,9 +418,9 @@ function render() {
             <dt>Composes</dt><dd>${d.composes.length ? d.composes.join(", ") : "none"}</dd>
           </dl>
           <div class="actions">
-            <button onclick="event.stopPropagation(); alert('Would view body of ${d.id}@${d.version}')">View body</button>
-            <button onclick="event.stopPropagation(); alert('Would run ${d.id}@${d.version}')">Run</button>
-            <button onclick="event.stopPropagation(); alert('Would show eval history for ${d.id}@${d.version}')">Eval history</button>
+            <button onclick="event.stopPropagation(); viewBody('${d.id}', '${d.version}', '${d.file || ""}')">View body</button>
+            <button onclick="event.stopPropagation(); alert('Run via: ./scripts/execute_with_jules.sh ${d.id} \\"<task>\\" --version ${d.version}')">Run</button>
+            <button onclick="event.stopPropagation(); alert('Eval status: ${d.evalStatus}')">Eval history</button>
           </div>
         </div>
       </div>
@@ -402,7 +445,15 @@ document.getElementById("sort").addEventListener("change", e => {
   render();
 });
 
-render();
+function viewBody(id, version, file) {
+  if (!file) {
+    alert(`No prompt file archived for ${id}@${version}`);
+    return;
+  }
+  window.open(`/registry-asset/${file}`, "_blank");
+}
+
+loadRegistry();
 </script>
 </body>
 </html>

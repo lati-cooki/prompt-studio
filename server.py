@@ -41,6 +41,14 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             self.handle_get_sessions()
         elif self.path == '/api/prompts':
             self.handle_get_prompts()
+        elif self.path == '/api/registry':
+            self.serve_file('registry/INDEX.json', 'application/json')
+        elif self.path.startswith('/registry-asset/'):
+            rel = self.path[len('/registry-asset/'):]
+            if '..' in rel or rel.startswith('/'):
+                self.send_error(400)
+                return
+            self.serve_file('registry/' + rel)
         elif self.path in ('/', '/sandbox', '/sandbox/'):
             self.serve_file('sandbox/index.html', 'text/html')
         elif self.path in ('/registry', '/registry/'):

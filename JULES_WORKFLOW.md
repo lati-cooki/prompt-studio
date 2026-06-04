@@ -2,35 +2,73 @@
 
 This document defines how Jules interacts with the Prompt Studio repository across its three roles. When creating a session for Jules (`jules new`), reference the specific role workflow below.
 
+## Architecture (current)
+
+- **`server.py`** — Unified backend on port 8000: SQLite (`prompt_studio.db`), REST API, static UIs.
+- **`sandbox/`** — Live prompt iteration UI. Sessions persist via `/api/sessions` (not `localStorage`).
+- **`registry/`** — Version-controlled prompts + `INDEX.json`. Registry widget loads live data from `/api/registry`.
+- **`scripts/`** — Eval, register, and Jules executor pipeline.
+
+```bash
+python3 server.py          # API + sandbox at / + registry at /registry
+python3 -m pytest tests/ -v
+cd sandbox && node --test js/*.test.js
+```
+
 ## 1. Developer Workflow
 
-**Goal:** Build the infrastructure of Prompt Studio.
-**Trigger:** Standard `jules new "Feature description"` commands.
+**Goal:** Build and maintain Prompt Studio infrastructure.
+**Trigger:** `jules new "Feature description"`
 
-**Current Architectural Mandate:**
-- The `sandbox` UI (currently saving to `localStorage`) and the `registry` interface (currently reading from a hardcoded list) must be merged.
-- We need a unified backend (Python/FastAPI + SQLite or similar) that both UIs use.
-- Jules must maintain the "no build step" philosophy of the sandbox where possible, or document any new build requirements clearly.
+**Guidelines:**
+- Keep the sandbox **no build step** (vanilla HTML/JS modules) unless a change truly requires npm.
+- New registry or session features should use the existing SQLite API in `server.py`, not duplicate state in HTML.
+- Whitelist static routes in `server.py` — do not re-enable broad directory serving (see `test_security.py`).
+- Do not commit `.devswarm-temp/` artifacts.
 
 ## 2. Evaluator Workflow
 
-**Goal:** Provide automated Quality Assurance for prompts.
-**Trigger:** `jules new "Evaluate draft prompt X against eval batch Y"`
+**Goal:** Automated QA for prompts.
+**Trigger:** `jules new "Evaluate consensus_protocol@1.1.0 against strategiai directive"`
 
 **Process:**
-1. Jules reads the drafted prompt from `sandbox/` (or the backend DB).
-2. Jules reads the evaluation criteria from `registry/evals/`.
-3. Jules executes the prompt against multiple target models (simulating the process found in `registry/evals/eval_batch_001.md`).
-4. Jules calculates the necessary metrics (e.g., the $\delta$ score from the Consensus Protocol).
-5. If the prompt passes the threshold, Jules generates a new schema entry in `registry/prompts/`, updates `registry/INDEX.json`, and commits the result.
+1. Read the prompt from `registry/prompts/` and the directive from `registry/evals/strategiai_directive.md`.
+2. Run evals (Anthropic models via script, or document multi-provider runs manually):
+
+```bash
+# Single model
+python3 scripts/evaluate_prompt.py \
+  --prompt registry/prompts/consensus_protocol_v1_1_0.md \
+  --directive registry/evals/strategiai_directive.md \
+  --model claude-opus-4-7
+
+# Full v1.1.0 regression batch (requires ANTHROPIC_API_KEY)
+./scripts/run_regression_v1_1_0.sh
+```
+
+3. Grade the markdown (`## Grade`) and set `grade` in the `*_data.json`.
+4. Register on pass:
+
+```bash
+python3 scripts/register_prompt.py \
+  --draft /path/to/draft.json \
+  --eval-data registry/evals/eval_<id>_data.json \
+  --index registry/INDEX.json
+```
+
+**v1.1.0 pass criteria:** Step 0 must surface the StrategiAI arithmetic inconsistency ($49 / 75 queries / $0.04–$0.06 vs claimed negative margin) and propose a reconciliation hypothesis.
 
 ## 3. Executor Workflow
 
-**Goal:** Use the registered prompts to do actual work.
+**Goal:** Run production prompts on real tasks.
 **Trigger:** `jules new "Execute task using registered prompt Z"`
 
+```bash
+./scripts/execute_with_jules.sh consensus_protocol "Evaluate the StrategiAI plan"
+./scripts/execute_with_jules.sh consensus_protocol "Evaluate X" --version 1.1.0 --dry-run
+```
+
 **Process:**
-1. Jules looks up the requested prompt in `registry/INDEX.json`.
-2. Jules extracts the prompt text (e.g., `registry/prompts/consensus_protocol_v1_1_0.md`).
-3. Jules applies the prompt as its system instruction or execution loop structure to solve the user's query.
-4. Jules outputs the result in the format specified by the registered prompt schema.
+1. Lookup in `registry/INDEX.json` (or `scripts/lookup_prompt.py`).
+2. Read prompt body from `registry/prompts/`.
+3. Apply as system context for the task; output per prompt schema.

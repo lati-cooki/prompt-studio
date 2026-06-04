@@ -1,6 +1,6 @@
 # Consensus Protocol — v1.1.0
 
-**Status:** draft (regression test pending)
+**Status:** draft (Step 0 regression PASS 2026-06-04; multi-model API batch pending)
 **Tier:** audit
 **Default model recommendation:** gemini-2.5-pro
 **Tokens (prompt body only):** ~2,650 (+250 vs v1.0.0)

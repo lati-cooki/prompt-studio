@@ -1,10 +1,10 @@
 # Consensus Protocol — v1.1.0
 
-**Status:** draft (Step 0 regression PASS 2026-06-04; multi-model API batch pending)
+**Status:** active (Opus + Sonnet Step 0 regression PASS, grade A, 2026-06-04)
 **Tier:** audit
 **Default model recommendation:** gemini-2.5-pro
 **Tokens (prompt body only):** ~2,650 (+250 vs v1.0.0)
-**Eval status:** pending
+**Eval status:** validated
 
 ## What changed from v1.0.0
 

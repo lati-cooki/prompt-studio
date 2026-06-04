@@ -3,5 +3,5 @@ __pycache__/
 server.log
 test_api.py
 prompt_studio.db
-.superpowers/
+.devswarm-temp/
 .env

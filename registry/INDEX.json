@@ -1,6 +1,6 @@
 {
   "registry_version": "0.1",
-  "generated_at": "2026-05-04",
+  "generated_at": "2026-06-04",
   "owner": "troy_builds",
   "owner_entity": "Lati Cooki LLC",
 
@@ -8,17 +8,32 @@
     {
       "id": "consensus_protocol",
       "version": "1.1.0",
-      "status": "draft",
+      "status": "active",
       "tier": "audit",
       "cost_per_run_usd": 0.04,
       "tokens_prompt_body": 2650,
       "default_model": "gemini-2.5-pro",
-      "tested_on": ["pending"],
-      "eval_status": "pending",
+      "tested_on": ["claude-opus-4.7", "claude-sonnet-4-6"],
+      "eval_status": "validated",
       "use_case": "Canonical multi-model decision committee",
       "composes": [],
       "file": "prompts/consensus_protocol_v1_1_0.md",
-      "notes": "Awaiting regression test on arithmetic-validation gap closed in this version"
+      "notes": "v1.1.0 regression PASS: Opus + Sonnet Step 0 grade A (2026-06-04). Opus fixed v1.0.0 arithmetic miss. GPT/Gemini/Grok re-test optional."
+    },
+    {
+      "id": "agent_operational_checklist",
+      "version": "1.0.0",
+      "status": "active",
+      "tier": "utility",
+      "cost_per_run_usd": null,
+      "tokens_prompt_body": 650,
+      "default_model": "gemma-4-26b",
+      "tested_on": ["gemma-4-26b"],
+      "eval_status": "unevaluated",
+      "use_case": "Pre-deployment governance checklist for autonomous agents (Clista)",
+      "composes": [],
+      "file": "prompts/agent_operational_checklist_v1_0_0.md",
+      "notes": "Registered from sandbox session sess-1780593640189-2h2wld (2026-06-04). Fixed [s]→[ ] typo on Feedback Loop checkbox."
     },
     {
       "id": "consensus_protocol",
@@ -115,6 +130,26 @@
 
   "evals": [
     {
+      "id": "eval_consensus_protocol_v1_1_0_2026-06-04_claude_sonnet_4_6",
+      "directive": "strategiai_pre_mvp_margin",
+      "date": "2026-06-04",
+      "prompt_under_test": "consensus_protocol@1.1.0",
+      "models_tested": ["claude-sonnet-4-6"],
+      "headline_finding": "Step 0 PASS (grade A): arithmetic inconsistency surfaced; reconciliation via workflow amplification.",
+      "file": "evals/eval_consensus_protocol_v1_1_0_2026-06-04_claude_sonnet_4_6.md",
+      "data_file": "evals/eval_consensus_protocol_v1_1_0_2026-06-04_claude_sonnet_4_6_data.json"
+    },
+    {
+      "id": "eval_consensus_protocol_v1_1_0_2026-06-04_claude_opus_4_7",
+      "directive": "strategiai_pre_mvp_margin",
+      "date": "2026-06-04",
+      "prompt_under_test": "consensus_protocol@1.1.0",
+      "models_tested": ["claude-opus-4-7"],
+      "headline_finding": "Step 0 PASS (grade A): Opus caught arithmetic inconsistency — regression fix confirmed vs v1.0.0",
+      "file": "evals/eval_consensus_protocol_v1_1_0_2026-06-04_claude_opus_4_7.md",
+      "data_file": "evals/eval_consensus_protocol_v1_1_0_2026-06-04_claude_opus_4_7_data.json"
+    },
+    {
       "id": "eval_batch_001",
       "directive": "strategiai_pre_mvp_margin",
       "date": "2026-05-04",
@@ -135,7 +170,7 @@
     {
       "id": "regression_test_v1_1_0",
       "description": "Run v1.1.0 on the StrategiAI directive across all four frontier models; verify all four catch the arithmetic inconsistency",
-      "blocker": "v1.1.0 is currently in draft status; needs to be exercised"
+      "blocker": "Anthropic 2/2 PASS (Opus + Sonnet, 2026-06-04). GPT-5.5, Gemini 2.5 Pro, Grok 4.3 not re-run on v1.1.0 yet."
     },
     {
       "id": "quality_cliff_probe",

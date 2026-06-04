@@ -5,22 +5,29 @@ import { pingVaultHealth, reindexVault } from "./vault.js";
 import { ALL_MODELS, FRONTIER_MODELS, LM_STUDIO_URL, getActiveModelKey } from "./config.js";
 import { renderSaveSlot, renderSessionList } from "./session-rail.js";
 import { buildMarkdown, triggerMarkdownDownload, slugify } from "./export.js";
-import { createSessionsStore, resolveSession } from "./sessions.js";
-import { createMeter }         from "./meter.js";
-import { createModelSelector } from "./model-selector.js";
-import { createRegistryPanel } from "./registry-panel.js";
-import * as api from "./api.js";
+import { createSessionsStore, resolveModelKey } from "./sessions.js";
+import { createMeter }                          from "./meter.js";
+import {
+  fetchRegistryIndex,
+  loadRegistryPromptBody,
+  listLoadablePrompts,
+} from "./registry.js";
 
-// ── State ──────────────────────────────────────────────
-let registryPrompts   = [];
-let registryPromptsMap = new Map();
-let activePrompt      = null;
-let activePaneMap     = {};   // modelKey → { state, pane, meter }
-let activeSessionId   = null;
-let selectedModelKeys = new Set([getActiveModelKey()]);
+const paneContainer = document.getElementById("pane-container");
+const stateA = createPaneState(DEFAULT_SYSTEM_PROMPT);
+let   stateB = null;
+let   paneB  = null;
 
-// Live model registry — starts with frontier, locals added after LM Studio query
-const liveModels = { ...FRONTIER_MODELS };
+let modelKeyA = getActiveModelKey();
+let modelKeyB = null;
+
+const paneA = createPane({
+  id:              "A",
+  container:       paneContainer,
+  initialPrompt:   DEFAULT_SYSTEM_PROMPT,
+  modelKeys:       Object.keys(MODELS),
+  initialModelKey: modelKeyA,
+});
 
 const sessionsStore = createSessionsStore();
 
@@ -207,16 +214,23 @@ $promptPicker.addEventListener("change", () => {
   if (prompt) applyPromptToAllPanes(prompt);
 });
 
-async function loadRegistryPrompts() {
-  try {
-    registryPrompts = await api.fetchPrompts();
-    registryPromptsMap.clear();
-    for (const p of registryPrompts) {
-      registryPromptsMap.set(`${p.id}|${p.version}`, p);
-    }
-    populatePromptPicker(registryPrompts);
-  } catch { /* server may not be running */ }
-}
+// ── New UI refs ──────────────────────────────────────────
+const $segSingle     = document.getElementById("seg-single");
+const $segCompare    = document.getElementById("seg-compare");
+const $stopBoth      = document.getElementById("stop-both");
+const $exportBtn     = document.getElementById("export-btn");
+const $registrySelect = document.getElementById("registry-prompt-select");
+const $registryLoadBtn = document.getElementById("registry-load-btn");
+const $registryStatus  = document.getElementById("registry-status");
+const $composerLabel = document.getElementById("composer-label");
+const $sendHint      = document.getElementById("send-hint");
+const $topbarSession = document.getElementById("topbar-session");
+const $topbarSubtitle = document.getElementById("topbar-subtitle");
+const $topbarDots    = document.getElementById("topbar-dots");
+const $railModeTag   = document.getElementById("rail-mode-tag");
+const $sessionsList  = document.getElementById("sessions-list");
+const $vaultCardSub  = document.getElementById("vault-card-sub");
+const $vaultCheckVisual = document.getElementById("vault-checkbox-visual");
 
 // ── Tab switching ───────────────────────────────────────
 function switchTab(tab) {
@@ -497,6 +511,78 @@ $exportBtn.addEventListener("click", () => {
   const date     = new Date().toISOString().slice(0, 10);
   triggerMarkdownDownload({ filename: `${slugify(name)}-${date}.md`, markdown });
 });
+
+function showRegistryStatus(msg, isError = false) {
+  $registryStatus.hidden = false;
+  $registryStatus.textContent = msg;
+  $registryStatus.style.color = isError ? "var(--red)" : "";
+  if (!isError) {
+    setTimeout(() => { $registryStatus.hidden = true; }, 5000);
+  }
+}
+
+function paneHasConversation(state) {
+  return state.messages.some((m) => m.role === "user" || m.role === "assistant");
+}
+
+function applyRegistryPromptToPane(state, pane, body) {
+  state.applyPrompt(body);
+  pane.textarea.value = body;
+  pane.refreshPreview();
+  pane.clearLog();
+}
+
+async function populateRegistrySelect() {
+  try {
+    const prompts = listLoadablePrompts(await fetchRegistryIndex());
+    $registrySelect.innerHTML = '<option value="">Load from registry…</option>';
+    for (const p of prompts) {
+      const opt = document.createElement("option");
+      opt.value = p.file;
+      opt.textContent = `${p.id}@${p.version}`;
+      if (p.use_case) opt.title = p.use_case;
+      $registrySelect.appendChild(opt);
+    }
+  } catch (err) {
+    $registrySelect.innerHTML =
+      '<option value="">Registry unavailable</option>';
+    showRegistryStatus(err.message, true);
+  }
+}
+
+async function handleRegistryLoad() {
+  const file = $registrySelect.value;
+  if (!file) return;
+
+  const label = $registrySelect.selectedOptions[0]?.textContent ?? file;
+  const hasChat =
+    paneHasConversation(stateA) || (stateB && paneHasConversation(stateB));
+  if (hasChat) {
+    const ok = confirm(
+      `Load ${label} into pane A? The current conversation will be cleared.`
+    );
+    if (!ok) return;
+  }
+
+  $registryLoadBtn.disabled = true;
+  showRegistryStatus("Loading…");
+  try {
+    const body = await loadRegistryPromptBody(file);
+    applyRegistryPromptToPane(stateA, paneA, body);
+    $topbarSubtitle.textContent = `registry · ${label}`;
+    meterA?.render();
+    showRegistryStatus(`Loaded ${label}`);
+  } catch (err) {
+    showRegistryStatus(err.message, true);
+  } finally {
+    $registryLoadBtn.disabled = false;
+  }
+}
+
+$registryLoadBtn.addEventListener("click", handleRegistryLoad);
+populateRegistrySelect();
+
+refreshSessionList();
 
 // ── Keyboard shortcuts ───────────────────────────────────
 document.addEventListener("keydown", (e) => {

@@ -85,6 +85,14 @@ body::after {
 }
 .doc-meta span + span::before { content: ' · '; }
 
+.doc-nav { margin-bottom: 10px; }
+.doc-nav a {
+  font-family: var(--mono); font-size: 10px;
+  letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--teal); text-decoration: none;
+}
+.doc-nav a:hover { color: var(--ink); }
+
 /* ── Info banner ──────────────────────────────────── */
 .info-banner {
   background: var(--paper-3);
@@ -267,6 +275,7 @@ select {
 <div class="wrap">
 
   <div class="doc-header">
+    <div class="doc-nav"><a href="/">← Studio</a></div>
     <div class="doc-eyebrow">Prompt Studio · Registry · v0.1</div>
     <h1 class="doc-title">Prompt Registry</h1>
     <div class="doc-meta" id="doc-meta">
@@ -274,7 +283,10 @@ select {
     </div>
   </div>
 
-  <div id="error-banner" class="info-banner" style="display:none;border-left-color:var(--red);color:var(--red)"></div>
+  <div class="info-banner" id="load-banner" style="display:none">
+    Loading registry from <code>/api/registry</code>…
+  </div>
+  <div class="info-banner" id="error-banner" style="display:none;color:var(--red)"></div>
 
   <div class="stats">
     <div class="stat">
@@ -312,46 +324,66 @@ select {
   <div id="rows"></div>
 
   <div class="doc-footer" id="doc-footer">
-    Connected to Prompt Studio API.
+    Connected to <code>/api/registry</code> (INDEX.json). Start with <code>python3 server.py</code>.
   </div>
 
 </div>
 
 <script>
-const API_BASE = (function() {
-  const base = window.PROMPT_STUDIO_API_BASE || "http://localhost:8000/api";
-  return base;
-})();
-
 let data = [];
 let activeFilter = "all";
 let activeSort   = "name";
 
-function esc(str) {
-  return String(str ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
-}
-
-function costStr(c) {
-  if (c == null) return "—";
-  return `~$${Number(c).toFixed(c < 0.01 ? 4 : 2)}`;
+function mapPrompt(p) {
+  const cost = p.cost_per_run_usd;
+  return {
+    id: p.id,
+    version: p.version,
+    status: p.status,
+    tier: p.tier,
+    cost,
+    costStr: cost != null ? `~$${cost}` : "—",
+    tokens: p.tokens_prompt_body,
+    defaultModel: p.default_model || "—",
+    evalStatus: p.eval_status || "—",
+    useCase: p.use_case || "",
+    composes: p.composes || [],
+    note: p.notes || "",
+    file: p.file,
+  };
 }
 
 function updateStats() {
-  const total      = data.length;
+  const total = data.length;
   const production = data.filter(d => d.status === "production").length;
-  const evaled     = data.filter(d => d.evalStatus && d.evalStatus !== "unevaluated" && d.evalStatus !== "pending").length;
-  const evalPct    = total ? Math.round(evaled / total * 100) + "%" : "—";
-  const costs      = data.map(d => d.costPerRunUsd).filter(c => c != null);
-  const avgCost    = costs.length ? "$" + (costs.reduce((a, b) => a + b, 0) / costs.length).toFixed(3) : "—";
+  const evaluated = data.filter(d => d.evalStatus && !["pending", "unevaluated", "n/a"].includes(d.evalStatus)).length;
+  const costs = data.map(d => d.cost).filter(c => c != null);
+  const avgCost = costs.length ? costs.reduce((a, b) => a + b, 0) / costs.length : null;
 
-  const tiers = [...new Set(data.map(d => d.tier).filter(Boolean))];
-  document.getElementById("meta-count").textContent =
-    `${total} entries · ${tiers.length} tier${tiers.length !== 1 ? "s" : ""}`;
+  document.getElementById("stat-total").textContent = String(total);
+  document.getElementById("stat-production").textContent = String(production);
+  document.getElementById("stat-eval").textContent = total ? `${Math.round((evaluated / total) * 100)}%` : "—";
+  document.getElementById("stat-cost").textContent = avgCost != null ? `$${avgCost.toFixed(2)}` : "—";
+}
 
-  document.getElementById("stat-total").textContent      = total;
-  document.getElementById("stat-production").textContent = production;
-  document.getElementById("stat-eval").textContent       = evalPct;
-  document.getElementById("stat-cost").textContent       = avgCost;
+async function loadRegistry() {
+  document.getElementById("load-banner").style.display = "block";
+  try {
+    const res = await fetch("/api/registry");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const index = await res.json();
+    data = (index.prompts || []).map(mapPrompt);
+    document.getElementById("doc-footer").textContent =
+      `Registry v${index.registry_version || "?"} · generated ${index.generated_at || "?"} · ${data.length} prompts`;
+    updateStats();
+    render();
+  } catch (err) {
+    document.getElementById("error-banner").textContent =
+      `Failed to load registry: ${err.message}. Is server.py running on port 8000?`;
+    document.getElementById("error-banner").style.display = "block";
+  } finally {
+    document.getElementById("load-banner").style.display = "none";
+  }
 }
 
 function render() {
@@ -392,8 +424,9 @@ function render() {
             <dt>Composes</dt><dd>${d.composes && d.composes.length ? d.composes.map(esc).join(", ") : "none"}</dd>
           </dl>
           <div class="actions">
-            ${d.body ? `<button onclick="event.stopPropagation(); showBody(${JSON.stringify(d.id)}, ${JSON.stringify(d.version)})">View body</button>` : ""}
-            <button onclick="event.stopPropagation(); window.parent.postMessage({type:'loadPrompt',id:${JSON.stringify(d.id)},version:${JSON.stringify(d.version)}},'*')">Open in Eval →</button>
+            <button onclick="event.stopPropagation(); viewBody('${d.id}', '${d.version}', '${d.file || ""}')">View body</button>
+            <button onclick="event.stopPropagation(); alert('Run via: ./scripts/execute_with_jules.sh ${d.id} \\"<task>\\" --version ${d.version}')">Run</button>
+            <button onclick="event.stopPropagation(); alert('Eval status: ${d.evalStatus}')">Eval history</button>
           </div>
         </div>
       </div>
@@ -442,7 +475,15 @@ document.getElementById("sort").addEventListener("change", e => {
   render();
 });
 
-loadData();
+function viewBody(id, version, file) {
+  if (!file) {
+    alert(`No prompt file archived for ${id}@${version}`);
+    return;
+  }
+  window.open(`/registry-asset/${file}`, "_blank");
+}
+
+loadRegistry();
 </script>
 </body>
 </html>

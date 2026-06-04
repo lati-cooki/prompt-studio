@@ -98,6 +98,22 @@ body::after {
 .rail-new-spacer { flex: 1; }
 .rail-new-kbd { font-family: var(--mono); font-size: 9.5px; color: var(--ink-4); }
 
+.rail-registry-wrap { padding: 0 12px 10px; }
+.rail-registry-link {
+  display: flex; align-items: center; gap: 8px;
+  width: 100%; padding: 7px 10px;
+  background: var(--paper); color: var(--ink-2);
+  border: 1px solid var(--line);
+  font-family: var(--mono); font-size: 10.5px;
+  letter-spacing: 0.02em; text-decoration: none;
+  transition: color 0.1s, border-color 0.1s, background 0.1s;
+}
+.rail-registry-link:hover {
+  color: var(--ink); border-color: rgba(12,15,20,0.28);
+  background: var(--paper-3);
+}
+.rail-registry-arrow { color: var(--plum); font-size: 12px; line-height: 1; }
+
 .rail-saved-label {
   padding: 14px 16px 5px;
   font-family: var(--mono); font-size: 9px;
@@ -252,6 +268,7 @@ body::after {
   white-space: nowrap;
 }
 .ghost-btn:hover { color: var(--ink); border-color: rgba(12,15,20,0.28); }
+a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; }
 .stop-btn {
   background: transparent; border: 1px solid var(--red); color: var(--red);
   padding: 5px 11px; font-family: var(--mono); font-size: 10.5px;
@@ -611,7 +628,14 @@ body::after {
     </button>
   </div>
 
-  <div class="rail-saved-label">Registry</div>
+  <div class="rail-registry-wrap">
+    <a class="rail-registry-link" href="/registry" title="Open prompt registry">
+      <span class="rail-registry-arrow">→</span>
+      Prompt registry
+    </a>
+  </div>
+
+  <div class="rail-saved-label">Sessions</div>
   <div class="rail-list" id="sessions-list"></div>
 
   <div class="rail-save-slot" id="sessions-save-slot"></div>
@@ -647,6 +671,7 @@ body::after {
           <span class="seg-dot-a"></span><span class="seg-dot-b"></span>Compare A / B
         </button>
       </div>
+      <a class="ghost-btn" href="/registry">Registry</a>
       <button class="ghost-btn" id="export-btn">Export .md</button>
       <button class="stop-btn" id="stop-both" hidden>⏹ Stop both</button>
     </div>

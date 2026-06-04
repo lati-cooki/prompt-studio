@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createSessionsStore, resolveModelKey } from "./sessions.js";
+import { createSessionsStore, resolveModelKey, resolveSession } from "./sessions.js";
 import { exportToRegistryDraft } from "./sessions.js";
 
 const sampleSession = {
@@ -199,4 +199,25 @@ test("exportToRegistryDraft: name with special chars slugifies cleanly", () => {
 test("exportToRegistryDraft: empty name falls back to 'draft'", () => {
   const draft = exportToRegistryDraft({ ...sampleSession, name: "" });
   assert.equal(draft.id, "draft");
+});
+
+test("resolveSession: new format returns promptRef and models", () => {
+  const entry = {
+    panes: { promptRef: { id: "my_prompt", version: "1.0.0" }, models: ["qwen3-4b"], panes: [] },
+    vaultConfig: { enabled: false, topK: 5 },
+  };
+  const r = resolveSession(entry);
+  assert.deepEqual(r.promptRef, { id: "my_prompt", version: "1.0.0" });
+  assert.deepEqual(r.models, ["qwen3-4b"]);
+});
+
+test("resolveSession: legacy array format returns null promptRef and empty models", () => {
+  const entry = {
+    panes: [{ systemPrompt: "hello", messages: [], modelKey: "qwen3-4b" }],
+    vaultConfig: { enabled: false, topK: 5 },
+  };
+  const r = resolveSession(entry);
+  assert.equal(r.promptRef, null);
+  assert.deepEqual(r.models, []);
+  assert.equal(r.panes[0].systemPrompt, "hello");
 });

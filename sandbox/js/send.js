@@ -41,13 +41,19 @@ async function streamOnePane({ state, pane, model, vaultMessage, vaultResults })
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: model.id,
+        model:    model.id,
         messages: turnMessages,
-        stream: true,
+        stream:   true,
         max_tokens: 4096,
+        ...(model.provider && model.provider !== "local" && { provider: model.provider }),
       }),
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+    if (!res.ok) {
+      const text = await res.text();
+      let msg;
+      try { msg = JSON.parse(text).error; } catch { /* not JSON */ }
+      throw new Error(msg ?? `HTTP ${res.status}`);
+    }
 
     const reader  = res.body.getReader();
     const decoder = new TextDecoder();

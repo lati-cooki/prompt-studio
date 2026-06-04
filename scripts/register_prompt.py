@@ -13,7 +13,7 @@ import json
 import os
 import sys
 import tempfile
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 
 
 def check_duplicate(index: dict, prompt_id: str, version: str) -> bool:

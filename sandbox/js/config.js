@@ -1,27 +1,77 @@
-export const MODELS = {
-  "gemma-4-26b": {
-    id:            "mlx-community/gemma-4-26B-A4B-it-4bit",
-    endpoint:      "http://localhost:8080/v1/chat/completions",
+// LM Studio serves all local models on a single endpoint.
+// Models are discovered at runtime via GET /v1/models.
+// Override by setting window.LM_STUDIO_URL before this module loads,
+// or set LM_STUDIO_URL in .env (server injects it as a <script> tag).
+export const LM_STUDIO_URL =
+  (typeof window !== "undefined" && window.LM_STUDIO_URL) ||
+  "http://192.168.128.75:1234";
+
+export const FRONTIER_MODELS = {
+  // Anthropic
+  "claude-haiku-4-5": {
+    id:            "claude-haiku-4-5-20251001",
+    endpoint:      "/api/chat",
+    contextWindow: 200000,
+    group:         "frontier",
+    provider:      "anthropic",
+  },
+  "claude-sonnet-4-6": {
+    id:            "claude-sonnet-4-6",
+    endpoint:      "/api/chat",
+    contextWindow: 200000,
+    group:         "frontier",
+    provider:      "anthropic",
+  },
+  // OpenAI
+  "gpt-4o": {
+    id:            "gpt-4o",
+    endpoint:      "/api/chat",
     contextWindow: 128000,
+    group:         "frontier",
+    provider:      "openai",
   },
-  "qwen3-4b": {
-    id:            "mlx-community/Qwen3-4B-Instruct-2507-4bit",
-    endpoint:      "http://localhost:8091/v1/chat/completions",
-    contextWindow: 262144,
+  "gpt-4o-mini": {
+    id:            "gpt-4o-mini",
+    endpoint:      "/api/chat",
+    contextWindow: 128000,
+    group:         "frontier",
+    provider:      "openai",
   },
-  "qwen3-27b": {
-    id:            "Jackrong/MLX-Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled-v2-4bit",
-    endpoint:      "http://localhost:8092/v1/chat/completions",
-    contextWindow: 262144,
+  // xAI Grok
+  "grok-3": {
+    id:            "grok-3",
+    endpoint:      "/api/chat",
+    contextWindow: 131072,
+    group:         "frontier",
+    provider:      "xai",
+  },
+  // Google Gemini
+  "gemini-2.5-pro": {
+    id:            "gemini-2.5-pro-preview-05-06",
+    endpoint:      "/api/chat",
+    contextWindow: 1000000,
+    group:         "frontier",
+    provider:      "google",
+  },
+  "gemini-2.5-flash": {
+    id:            "gemini-2.5-flash-preview-04-17",
+    endpoint:      "/api/chat",
+    contextWindow: 1000000,
+    group:         "frontier",
+    provider:      "google",
   },
 };
 
-export const DEFAULT_MODEL_KEY = "gemma-4-26b";
+// ALL_MODELS starts frontier-only; local models are added at runtime by app.js
+// after querying LM Studio's /v1/models endpoint.
+export const ALL_MODELS = { ...FRONTIER_MODELS };
+
+export const DEFAULT_MODEL_KEY = "claude-sonnet-4-6";
 
 export function getActiveModelKey() {
   try {
     const saved = localStorage.getItem("promptSandbox.modelKey");
-    if (saved && Object.prototype.hasOwnProperty.call(MODELS, saved)) {
+    if (saved && Object.prototype.hasOwnProperty.call(ALL_MODELS, saved)) {
       return saved;
     }
     return DEFAULT_MODEL_KEY;

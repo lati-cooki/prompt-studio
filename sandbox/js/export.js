@@ -35,16 +35,43 @@ export function buildMarkdown(snapshot, exportedName) {
   return frontmatter + sections.join("\n");
 }
 
-export function triggerMarkdownDownload({ filename, markdown }) {
-  const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement("a");
+export function buildRegistryDraft(snapshot, paneIndex = 0) {
+  const { panes } = snapshot;
+  const pane = panes[paneIndex];
+  if (!pane) return null;
+  const name = snapshot.name || "untitled";
+  return {
+    id:       slugify(name),
+    version:  "1.0.0",
+    status:   "draft",
+    tier:     "audit",
+    body:     pane.systemPrompt,
+    use_case: `Draft exported from Sandbox session: ${name}`,
+    metadata: {
+      exported_at:           new Date().toISOString(),
+      original_session_name: name,
+      model_key:             pane.modelKey,
+    },
+  };
+}
+
+function downloadBlob(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a   = document.createElement("a");
   a.href     = url;
   a.download = filename;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+export function triggerMarkdownDownload({ filename, markdown }) {
+  downloadBlob(new Blob([markdown], { type: "text/markdown;charset=utf-8" }), filename);
+}
+
+export function triggerJsonDownload({ filename, json }) {
+  downloadBlob(new Blob([JSON.stringify(json, null, 2)], { type: "application/json;charset=utf-8" }), filename);
 }
 
 export function renderExportSlot(slot, { onExport }) {
@@ -58,6 +85,7 @@ export function renderExportSlot(slot, { onExport }) {
 }
 
 export function slugify(name) {
+  if (typeof name !== "string") return "prompt-sandbox";
   return name
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")

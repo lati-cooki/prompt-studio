@@ -32,5 +32,6 @@ for model in "${MODELS[@]}"; do
 done
 
 echo ""
-echo "Done. Review each eval_*.md Step 0 section for arithmetic inconsistency detection."
+echo "Done. Each model writes a separate eval_*_<model>.md (no overwrites)."
+echo "Review Step 0 in each file for arithmetic inconsistency detection."
 echo "Grade in markdown + *_data.json, then register with register_prompt.py if passing."

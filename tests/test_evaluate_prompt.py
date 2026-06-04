@@ -18,6 +18,14 @@ class TestBuildEvalId(unittest.TestCase):
         eid = ep.build_eval_id("my_prompt", "0.1.0", date(2026, 1, 1))
         self.assertIn("v0_1_0", eid)
 
+    def test_includes_model_slug(self):
+        eid = ep.build_eval_id(
+            "consensus_protocol", "1.1.0", date(2026, 6, 4), "claude-opus-4-7"
+        )
+        self.assertEqual(
+            eid, "eval_consensus_protocol_v1_1_0_2026-06-04_claude_opus_4_7"
+        )
+
 
 class TestEstimateCost(unittest.TestCase):
     def test_sonnet_4_6(self):

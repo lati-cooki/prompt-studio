@@ -18,7 +18,7 @@
       "use_case": "Canonical multi-model decision committee",
       "composes": [],
       "file": "prompts/consensus_protocol_v1_1_0.md",
-      "notes": "v1.1.0 Step 0 regression PASS (2026-06-04, grok-agent). Pending Claude API batch via run_regression_v1_1_0.sh before production promotion."
+      "notes": "Sonnet 4.6 Step 0 PASS (grade A, 2026-06-04). Opus 4.7 re-run needed (prior run overwritten). Promote after Opus PASS."
     },
     {
       "id": "consensus_protocol",
@@ -115,14 +115,14 @@
 
   "evals": [
     {
-      "id": "eval_consensus_protocol_v1_1_0_2026-06-04",
+      "id": "eval_consensus_protocol_v1_1_0_2026-06-04_claude_sonnet_4_6",
       "directive": "strategiai_pre_mvp_margin",
       "date": "2026-06-04",
       "prompt_under_test": "consensus_protocol@1.1.0",
-      "models_tested": ["grok-agent (manual regression)"],
-      "headline_finding": "Step 0 PASS: v1.1.0 surfaced Starter-tier arithmetic inconsistency ($49/75q/$0.04-0.06 vs claimed negative margin) and proposed reconciliation hypotheses",
-      "file": "evals/eval_consensus_protocol_v1_1_0_2026-06-04.md",
-      "data_file": "evals/eval_consensus_protocol_v1_1_0_2026-06-04_data.json"
+      "models_tested": ["claude-sonnet-4-6"],
+      "headline_finding": "Step 0 PASS (grade A): arithmetic inconsistency surfaced; reconciliation via workflow amplification. Opus run lost to filename collision — re-run.",
+      "file": "evals/eval_consensus_protocol_v1_1_0_2026-06-04_claude_sonnet_4_6.md",
+      "data_file": "evals/eval_consensus_protocol_v1_1_0_2026-06-04_claude_sonnet_4_6_data.json"
     },
     {
       "id": "eval_batch_001",
@@ -145,7 +145,7 @@
     {
       "id": "regression_test_v1_1_0",
       "description": "Run v1.1.0 on the StrategiAI directive across all four frontier models; verify all four catch the arithmetic inconsistency",
-      "blocker": "Partial: 1/1 manual run PASS (2026-06-04). Claude API batch and non-Anthropic models still pending."
+      "blocker": "Sonnet PASS; Opus lost to filename bug (fixed). Re-run: python3 scripts/evaluate_prompt.py ... --model claude-opus-4-7"
     },
     {
       "id": "quality_cliff_probe",

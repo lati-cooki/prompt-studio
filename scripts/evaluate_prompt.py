@@ -35,9 +35,11 @@ _PRICING = {
 }
 
 
-def build_eval_id(prompt_id: str, version: str, run_date: date) -> str:
+def build_eval_id(prompt_id: str, version: str, run_date: date, model: str = "") -> str:
     safe_version = version.replace(".", "_")
-    return f"eval_{prompt_id}_v{safe_version}_{run_date.isoformat()}"
+    safe_model = model.replace(".", "_").replace("-", "_") if model else ""
+    base = f"eval_{prompt_id}_v{safe_version}_{run_date.isoformat()}"
+    return f"{base}_{safe_model}" if safe_model else base
 
 
 def estimate_cost(model: str, input_tokens: int, output_tokens: int, cache_read_tokens: int):
@@ -156,7 +158,7 @@ def main():
     result = run_eval(prompt_body, directive_text, args.model)
 
     today = date.today()
-    eval_id = build_eval_id(prompt_id, version, today)
+    eval_id = build_eval_id(prompt_id, version, today, args.model)
     cost = estimate_cost(args.model, result["tokens"]["input"], result["tokens"]["output"], result["tokens"]["cache_read"])
 
     eval_data = {

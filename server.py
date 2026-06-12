@@ -4,6 +4,7 @@ import os
 import socketserver
 import json
 import sqlite3
+import concurrent.futures
 import urllib.request
 import urllib.error
 
@@ -174,17 +175,27 @@ def _seed_prompts_from_index(conn):
     except Exception:
         return
     owner = index.get("owner", "")
+    prompts = index.get("prompts", [])
+
+    unique_fpaths = {p.get("file") for p in prompts if p.get("file")}
+
+    def read_file(fpath):
+        full = os.path.join(os.path.dirname(__file__), "registry", fpath)
+        try:
+            with open(full) as bf:
+                return fpath, bf.read()
+        except FileNotFoundError:
+            return fpath, ""
+
+    file_bodies = {}
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        for fpath, body in executor.map(read_file, unique_fpaths):
+            file_bodies[fpath] = body
+
     params = []
-    for p in index.get("prompts", []):
-        body = ""
+    for p in prompts:
         fpath = p.get("file")
-        if fpath:
-            full = os.path.join(os.path.dirname(__file__), "registry", fpath)
-            try:
-                with open(full) as bf:
-                    body = bf.read()
-            except FileNotFoundError:
-                pass
+        body = file_bodies.get(fpath, "")
         params.append((
             p.get("id"), p.get("version"), p.get("status"),
             p.get("tier"), owner, body, p.get("use_case"),
@@ -229,7 +240,7 @@ def init_db():
 class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
     _anthropic_clients = {}
     def end_headers(self):
-        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Origin', os.environ.get('ALLOWED_ORIGIN', 'http://localhost:7777'))
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         super().end_headers()
@@ -431,6 +442,9 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 (data["id"], data["name"], data["createdAt"], data["updatedAt"], json.dumps(data["panes"]), json.dumps(data["vaultConfig"]))
             )
             conn.commit()
+        except sqlite3.IntegrityError:
+            self.send_error(409, "Prompt already exists")
+            return
         finally:
             conn.close()
         self.send_json({"status": "success"})
@@ -539,6 +553,10 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         data = self.read_json_body()
         if data is None:
             return
+        required = ("id", "version")
+        if not all(k in data for k in required):
+            self.send_error(400, "Missing required fields")
+            return
         conn = self.get_db()
         try:
             cursor = conn.cursor()
@@ -561,6 +579,9 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 )
             )
             conn.commit()
+        except sqlite3.IntegrityError:
+            self.send_error(409, "Prompt already exists")
+            return
         finally:
             conn.close()
         self.send_json({"status": "success"})
@@ -603,6 +624,9 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 (prompt_id, new_version, body)
             )
             conn.commit()
+        except sqlite3.IntegrityError:
+            self.send_error(409, "Prompt already exists")
+            return
         finally:
             conn.close()
         self.send_json({"status": "draft", "id": prompt_id, "version": new_version})

@@ -59,17 +59,17 @@ def _sample_eval_data():
 class TestCheckDuplicate(unittest.TestCase):
     def test_no_duplicate_on_empty(self):
         index = _make_index()
-        self.assertFalse(rp.check_duplicate(index, "my_prompt", "0.1.0"))
+        self.assertFalse(rp.check_duplicate({(e.get("id"), e.get("version")) for e in index.get("prompts", [])}, "my_prompt", "0.1.0"))
 
     def test_detects_exact_match(self):
         existing = {"id": "my_prompt", "version": "0.1.0"}
         index = _make_index(prompts=[existing])
-        self.assertTrue(rp.check_duplicate(index, "my_prompt", "0.1.0"))
+        self.assertTrue(rp.check_duplicate({(e.get("id"), e.get("version")) for e in index.get("prompts", [])}, "my_prompt", "0.1.0"))
 
     def test_different_version_not_duplicate(self):
         existing = {"id": "my_prompt", "version": "0.2.0"}
         index = _make_index(prompts=[existing])
-        self.assertFalse(rp.check_duplicate(index, "my_prompt", "0.1.0"))
+        self.assertFalse(rp.check_duplicate({(e.get("id"), e.get("version")) for e in index.get("prompts", [])}, "my_prompt", "0.1.0"))
 
 
 class TestMergeEvalIntoDraft(unittest.TestCase):

@@ -16,11 +16,8 @@ import tempfile
 from datetime import datetime, timezone
 
 
-def check_duplicate(index: dict, prompt_id: str, version: str) -> bool:
-    for entry in index.get("prompts", []):
-        if entry.get("id") == prompt_id and entry.get("version") == version:
-            return True
-    return False
+def check_duplicate(existing_prompts: set, prompt_id: str, version: str) -> bool:
+    return (prompt_id, version) in existing_prompts
 
 
 def merge_eval_into_draft(draft: dict, eval_data: dict) -> dict:
@@ -86,7 +83,8 @@ def main():
     prompt_id = draft["id"]
     version   = draft["version"]
 
-    if check_duplicate(index, prompt_id, version):
+    existing_prompts = {(entry.get("id"), entry.get("version")) for entry in index.get("prompts", [])}
+    if check_duplicate(existing_prompts, prompt_id, version):
         print(f"ERROR: {prompt_id}@{version} already exists in {args.index}. Aborting.", file=sys.stderr)
         sys.exit(1)
 

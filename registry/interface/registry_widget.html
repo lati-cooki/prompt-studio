@@ -330,6 +330,20 @@ select {
 </div>
 
 <script>
+function esc(str) {
+  if (str == null) return "";
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function costStr(cost) {
+  return cost != null ? `~$${Number(cost).toFixed(4)}` : "—";
+}
+
 let data = [];
 let activeFilter = "all";
 let activeSort   = "name";
@@ -342,7 +356,7 @@ function mapPrompt(p) {
     status: p.status,
     tier: p.tier,
     cost,
-    costStr: cost != null ? `~$${cost}` : "—",
+    costStr: costStr(cost),
     tokens: p.tokens_prompt_body,
     defaultModel: p.default_model || "—",
     evalStatus: p.eval_status || "—",

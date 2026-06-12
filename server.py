@@ -240,7 +240,7 @@ def init_db():
 class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
     _anthropic_clients = {}
     def end_headers(self):
-        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Origin', os.environ.get('ALLOWED_ORIGIN', 'http://localhost:7777'))
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         super().end_headers()

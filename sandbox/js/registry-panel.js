@@ -53,7 +53,9 @@ export function createRegistryPanel({ container, onSaveDraft, onValidate, onView
   function stat(label, value) {
     const row = document.createElement("div");
     row.className = "rp-stat";
-    row.innerHTML = `${label} <span>${value ?? "—"}</span>`;
+    const span = document.createElement("span");
+    span.textContent = value ?? "—";
+    row.append(`${label} `, span);
     return row;
   }
 

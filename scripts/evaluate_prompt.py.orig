@@ -15,9 +15,10 @@ The --prompt argument accepts either:
 """
 import argparse
 import json
+import os
 import sys
 import tempfile
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 # ── Pricing table (USD per million tokens) ─────────────

@@ -16,7 +16,6 @@ The --prompt argument accepts either:
 import argparse
 import json
 import sys
-import tempfile
 from datetime import date, datetime
 from pathlib import Path
 

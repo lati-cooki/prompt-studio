@@ -5,7 +5,7 @@ import { pingVaultHealth, reindexVault } from "./vault.js";
 import { ALL_MODELS, FRONTIER_MODELS, LM_STUDIO_URL, getActiveModelKey } from "./config.js";
 import { renderSaveSlot, renderSessionList } from "./session-rail.js";
 import { buildMarkdown, triggerMarkdownDownload, slugify } from "./export.js";
-import { createSessionsStore, resolveModelKey } from "./sessions.js";
+import { createSessionsStore } from "./sessions.js";
 import { createMeter }                          from "./meter.js";
 import {
   fetchRegistryIndex,

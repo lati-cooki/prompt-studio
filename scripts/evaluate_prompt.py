@@ -16,7 +16,8 @@ The --prompt argument accepts either:
 import argparse
 import json
 import sys
-from datetime import date, datetime
+import tempfile
+from datetime import date
 from pathlib import Path
 
 # ── Pricing table (USD per million tokens) ─────────────

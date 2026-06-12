@@ -17,7 +17,6 @@ import argparse
 import json
 import os
 import sys
-import tempfile
 from datetime import date, datetime
 from pathlib import Path
 

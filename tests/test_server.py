@@ -110,5 +110,61 @@ class TestNotFound(unittest.TestCase):
         self.assertEqual(h._last_status, 404)
 
 
+
+class TestGetPrompts(unittest.TestCase):
+    def test_get_prompts_empty(self):
+        h = MockHandler()
+        # MockHandler initializes a new in-memory DB per get_db call
+        # but we need to intercept the response.
+        # Wait, get_db() returns a NEW connection each time, which will be empty.
+        # Let's override get_db on our specific instance to persist data if needed.
+        h.handle_get_prompts()
+        self.assertEqual(h._last_status, 200)
+        self.assertEqual(h._body_written, b"[]")
+
+    def test_get_prompts_populated(self):
+        h = MockHandler()
+        # Create a persistent connection so we can prepopulate
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        schema_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "schema.sql"
+        )
+        with open(schema_path) as f:
+            conn.executescript(f.read())
+
+        conn.execute(
+            "INSERT INTO prompts (id, version, status, tier, owner, body, use_case, default_model) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("p1", "1.0", "active", "tier1", "user1", "my body", "test case", "claude")
+        )
+        conn.commit()
+
+        # Monkey-patch get_db for this instance
+        h.get_db = lambda: conn
+
+        h.handle_get_prompts()
+
+        # In handle_get_prompts, it writes directly to wfile via send_raw_json
+        # send_raw_json sets 200 header and writes json to wfile
+        self.assertEqual(h._last_status, 200)
+
+        data = json.loads(h._body_written.decode("utf-8"))
+        self.assertEqual(len(data), 1)
+
+        prompt = data[0]
+        self.assertEqual(prompt["id"], "p1")
+        self.assertEqual(prompt["version"], "1.0")
+        self.assertEqual(prompt["status"], "active")
+        self.assertEqual(prompt["tier"], "tier1")
+        self.assertEqual(prompt["owner"], "user1")
+        self.assertEqual(prompt["body"], "my body")
+        self.assertEqual(prompt["useCase"], "test case")
+        self.assertEqual(prompt["defaultModel"], "claude")
+
+        # Verify composes and testedOn default to empty list/array string or JSON
+        self.assertEqual(prompt["composes"], [])
+        self.assertEqual(prompt["testedOn"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

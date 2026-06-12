@@ -228,6 +228,14 @@ def init_db():
 
 class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
     _anthropic_clients = {}
+
+    BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+    ALLOWED_SUBDIRS = (
+        os.path.abspath(os.path.join(BASE_DIR, 'sandbox')),
+        os.path.abspath(os.path.join(BASE_DIR, 'registry'))
+    )
+    # Tuples of prefixes must end with os.sep so `/registry_secret` doesn't match `/registry`
+    ALLOWED_PREFIXES = tuple(d + os.sep for d in ALLOWED_SUBDIRS)
     def end_headers(self):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
@@ -312,19 +320,9 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
     def serve_file(self, path, content_type=None):
         try:
             # Secure path resolution: ensure the path stays within allowed subdirectories
-            base_dir = os.path.abspath(os.path.dirname(__file__))
-            requested_path = os.path.abspath(os.path.join(base_dir, path))
+            requested_path = os.path.abspath(os.path.join(self.BASE_DIR, path))
 
-            allowed_subdirs = [
-                os.path.abspath(os.path.join(base_dir, 'sandbox')),
-                os.path.abspath(os.path.join(base_dir, 'registry'))
-            ]
-
-            try:
-                if not any(os.path.commonpath([d, requested_path]) == d for d in allowed_subdirs):
-                    self.send_error(404, f"File not found: {path}")
-                    return
-            except ValueError:
+            if not (requested_path in self.ALLOWED_SUBDIRS or requested_path.startswith(self.ALLOWED_PREFIXES)):
                 self.send_error(404, f"File not found: {path}")
                 return
 

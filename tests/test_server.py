@@ -110,5 +110,58 @@ class TestNotFound(unittest.TestCase):
         self.assertEqual(h._last_status, 404)
 
 
+class DummyConn:
+    def __init__(self, conn):
+        self.conn = conn
+    def cursor(self):
+        return self.conn.cursor()
+    def commit(self):
+        self.conn.commit()
+    def close(self):
+        # Prevent handler from closing the shared connection
+        pass
+
+class PersistentDBMockHandler(MockHandler):
+    _shared_conn = None
+
+    def get_db(self):
+        if PersistentDBMockHandler._shared_conn is None:
+            conn = sqlite3.connect(":memory:")
+            conn.row_factory = sqlite3.Row
+            schema_path = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "schema.sql"
+            )
+            with open(schema_path) as f:
+                conn.executescript(f.read())
+            PersistentDBMockHandler._shared_conn = conn
+        return DummyConn(PersistentDBMockHandler._shared_conn)
+
+
+class TestPrompts(unittest.TestCase):
+    def tearDown(self):
+        if PersistentDBMockHandler._shared_conn:
+            PersistentDBMockHandler._shared_conn.close()
+            PersistentDBMockHandler._shared_conn = None
+
+    def test_post_prompts_duplicate_id_returns_409(self):
+        h = PersistentDBMockHandler()
+        payload = {
+            "id": "p1", "version": "1.0", "status": "active", "tier": "free", "owner": "me",
+            "body": "test", "useCase": "test", "costPerRunUsd": 0, "tokensPromptBody": 0,
+            "defaultModel": "gpt-3.5-turbo", "evalStatus": "tested", "file": "f1",
+            "notes": "", "composes": [], "testedOn": [], "createdAt": "t", "updatedAt": "t"
+        }
+
+        # First insertion should succeed
+        h._set_body(json.dumps(payload).encode())
+        h.handle_post_prompts()
+        self.assertEqual(h._last_status, 200)
+
+        # Second insertion with same id+version should return 409
+        h._set_body(json.dumps(payload).encode())
+        h.handle_post_prompts()
+        self.assertEqual(h._last_status, 409)
+
+
 if __name__ == "__main__":
     unittest.main()

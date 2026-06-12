@@ -431,6 +431,9 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 (data["id"], data["name"], data["createdAt"], data["updatedAt"], json.dumps(data["panes"]), json.dumps(data["vaultConfig"]))
             )
             conn.commit()
+        except sqlite3.IntegrityError:
+            self.send_error(409, "Prompt already exists")
+            return
         finally:
             conn.close()
         self.send_json({"status": "success"})
@@ -561,6 +564,9 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 )
             )
             conn.commit()
+        except sqlite3.IntegrityError:
+            self.send_error(409, "Prompt already exists")
+            return
         finally:
             conn.close()
         self.send_json({"status": "success"})
@@ -603,6 +609,9 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 (prompt_id, new_version, body)
             )
             conn.commit()
+        except sqlite3.IntegrityError:
+            self.send_error(409, "Prompt already exists")
+            return
         finally:
             conn.close()
         self.send_json({"status": "draft", "id": prompt_id, "version": new_version})

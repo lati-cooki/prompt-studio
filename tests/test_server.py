@@ -90,9 +90,23 @@ class TestBodySizeLimit(unittest.TestCase):
     def test_rejects_missing_required_fields_in_post_sessions(self):
         h = MockHandler()
         # Missing "vaultConfig"
-        payload = {"id": "s1", "name": "n", "createdAt": "t", "updatedAt": "t", "panes": []}
+        payload = {
+            "id": "s1",
+            "name": "n",
+            "createdAt": "t",
+            "updatedAt": "t",
+            "panes": [],
+        }
         h._set_body(json.dumps(payload).encode())
         h.handle_post_sessions()
+        self.assertEqual(h._last_status, 400)
+
+    def test_rejects_missing_required_fields_in_post_prompts(self):
+        h = MockHandler()
+        # Missing 'id' or 'version'
+        payload = {"status": "active"}
+        h._set_body(json.dumps(payload).encode())
+        h.handle_post_prompts()
         self.assertEqual(h._last_status, 400)
 
 
@@ -108,6 +122,72 @@ class TestNotFound(unittest.TestCase):
         h._set_body(b"")
         h.handle_delete_prompt("does-not-exist")
         self.assertEqual(h._last_status, 404)
+
+
+class TestPostPrompts(unittest.TestCase):
+    def test_post_prompts_inserts_row(self):
+        h = MockHandler()
+
+        # Override get_db to return a mock connection we can inspect
+        class MockConnection:
+            def __init__(self):
+                self.conn = sqlite3.connect(":memory:")
+                self.conn.row_factory = sqlite3.Row
+                schema_path = os.path.join(
+                    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                    "schema.sql",
+                )
+                with open(schema_path) as f:
+                    self.conn.executescript(f.read())
+                self.closed = False
+
+            def cursor(self):
+                return self.conn.cursor()
+
+            def commit(self):
+                self.conn.commit()
+
+            def close(self):
+                self.closed = True
+
+        mock_conn = MockConnection()
+        h.get_db = lambda: mock_conn
+
+        payload = {
+            "id": "test_prompt_1",
+            "version": "1.0",
+            "status": "draft",
+            "tier": "free",
+            "owner": "test_user",
+            "body": "Test prompt body",
+            "useCase": "testing",
+            "costPerRunUsd": 0.01,
+            "tokensPromptBody": 10,
+            "defaultModel": "gpt-4",
+            "evalStatus": "pending",
+            "file": "test.txt",
+            "notes": "some notes",
+            "composes": ["other_prompt"],
+            "testedOn": ["gpt-3.5"],
+            "createdAt": "2023-01-01T00:00:00Z",
+            "updatedAt": "2023-01-01T00:00:00Z",
+        }
+        h._set_body(json.dumps(payload).encode())
+
+        h.handle_post_prompts()
+
+        self.assertEqual(json.loads(h._body_written), {"status": "success"})
+        self.assertTrue(mock_conn.closed)
+
+        cursor = mock_conn.conn.cursor()
+        cursor.execute("SELECT * FROM prompts WHERE id = ?", ("test_prompt_1",))
+        row = cursor.fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["body"], "Test prompt body")
+        self.assertEqual(row["use_case"], "testing")
+        self.assertEqual(json.loads(row["composes"]), ["other_prompt"])
+
+        mock_conn.conn.close()
 
 
 if __name__ == "__main__":

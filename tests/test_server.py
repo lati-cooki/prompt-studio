@@ -125,42 +125,39 @@ class TestNotFound(unittest.TestCase):
 
 
 
-class TestDeleteSession(unittest.TestCase):
-    def test_delete_existing_session_success(self):
+class TestDeletePrompt(unittest.TestCase):
+
+    def test_delete_existing_prompt_returns_200(self):
         h = MockHandler()
 
-        # Use a shared in-memory database to persist state between setup and handler
-        bg_conn = sqlite3.connect("file:test_delete_session_success?mode=memory&cache=shared", uri=True)
+        shared_conn = sqlite3.connect("file:test_delete_prompt?mode=memory&cache=shared", uri=True)
+        shared_conn.row_factory = sqlite3.Row
         schema_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "schema.sql"
         )
         with open(schema_path) as f:
-            bg_conn.executescript(f.read())
+            shared_conn.executescript(f.read())
 
-        # Insert a mock session
-        bg_conn.execute(
-            "INSERT INTO sessions (id, name, created_at, updated_at, panes, vault_config) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            ("test-session-123", "Test Session", "2023-01-01T00:00:00Z", "2023-01-01T00:00:00Z", "[]", "{}")
-        )
-        bg_conn.commit()
+        shared_conn.execute("INSERT INTO prompts (id, version, status, body) VALUES ('prompt-1', 'v1', 'draft', 'hello')")
+        shared_conn.commit()
 
-        def patched_get_db():
-            conn = sqlite3.connect("file:test_delete_session_success?mode=memory&cache=shared", uri=True)
+        def mock_get_db():
+            conn = sqlite3.connect("file:test_delete_prompt?mode=memory&cache=shared", uri=True)
             conn.row_factory = sqlite3.Row
             return conn
 
-        h.get_db = patched_get_db
+        h.get_db = mock_get_db
 
         h._set_body(b"")
-        h.handle_delete_session("test-session-123")
+        h.handle_delete_prompt("prompt-1")
 
         self.assertEqual(h._last_status, 200)
         self.assertEqual(json.loads(h._body_written), {"status": "success"})
 
-        cursor = bg_conn.execute("SELECT COUNT(*) FROM sessions WHERE id = ?", ("test-session-123",))
-        self.assertEqual(cursor.fetchone()[0], 0)
-        bg_conn.close()
+        cursor = shared_conn.cursor()
+        cursor.execute("SELECT * FROM prompts WHERE id = 'prompt-1'")
+        self.assertIsNone(cursor.fetchone())
+        shared_conn.close()
 
 
 if __name__ == "__main__":

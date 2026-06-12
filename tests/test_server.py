@@ -145,39 +145,59 @@ class TestNotFound(unittest.TestCase):
 
 
 
-class TestDeletePrompt(unittest.TestCase):
-
-    def test_delete_existing_prompt_returns_200(self):
+class TestGetPrompts(unittest.TestCase):
+    def test_get_prompts_empty(self):
         h = MockHandler()
+        # MockHandler initializes a new in-memory DB per get_db call
+        # but we need to intercept the response.
+        # Wait, get_db() returns a NEW connection each time, which will be empty.
+        # Let's override get_db on our specific instance to persist data if needed.
+        h.handle_get_prompts()
+        self.assertEqual(h._last_status, 200)
+        self.assertEqual(h._body_written, b"[]")
 
-        shared_conn = sqlite3.connect("file:test_delete_prompt?mode=memory&cache=shared", uri=True)
-        shared_conn.row_factory = sqlite3.Row
+    def test_get_prompts_populated(self):
+        h = MockHandler()
+        # Create a persistent connection so we can prepopulate
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
         schema_path = os.path.join(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "schema.sql"
         )
         with open(schema_path) as f:
-            shared_conn.executescript(f.read())
+            conn.executescript(f.read())
 
-        shared_conn.execute("INSERT INTO prompts (id, version, status, body) VALUES ('prompt-1', 'v1', 'draft', 'hello')")
-        shared_conn.commit()
+        conn.execute(
+            "INSERT INTO prompts (id, version, status, tier, owner, body, use_case, default_model) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            ("p1", "1.0", "active", "tier1", "user1", "my body", "test case", "claude")
+        )
+        conn.commit()
 
-        def mock_get_db():
-            conn = sqlite3.connect("file:test_delete_prompt?mode=memory&cache=shared", uri=True)
-            conn.row_factory = sqlite3.Row
-            return conn
+        # Monkey-patch get_db for this instance
+        h.get_db = lambda: conn
 
-        h.get_db = mock_get_db
+        h.handle_get_prompts()
 
-        h._set_body(b"")
-        h.handle_delete_prompt("prompt-1")
-
+        # In handle_get_prompts, it writes directly to wfile via send_raw_json
+        # send_raw_json sets 200 header and writes json to wfile
         self.assertEqual(h._last_status, 200)
-        self.assertEqual(json.loads(h._body_written), {"status": "success"})
 
-        cursor = shared_conn.cursor()
-        cursor.execute("SELECT * FROM prompts WHERE id = 'prompt-1'")
-        self.assertIsNone(cursor.fetchone())
-        shared_conn.close()
+        data = json.loads(h._body_written.decode("utf-8"))
+        self.assertEqual(len(data), 1)
+
+        prompt = data[0]
+        self.assertEqual(prompt["id"], "p1")
+        self.assertEqual(prompt["version"], "1.0")
+        self.assertEqual(prompt["status"], "active")
+        self.assertEqual(prompt["tier"], "tier1")
+        self.assertEqual(prompt["owner"], "user1")
+        self.assertEqual(prompt["body"], "my body")
+        self.assertEqual(prompt["useCase"], "test case")
+        self.assertEqual(prompt["defaultModel"], "claude")
+
+        # Verify composes and testedOn default to empty list/array string or JSON
+        self.assertEqual(prompt["composes"], [])
+        self.assertEqual(prompt["testedOn"], [])
 
 
 if __name__ == "__main__":

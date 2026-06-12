@@ -101,6 +101,14 @@ class TestBodySizeLimit(unittest.TestCase):
         h.handle_post_sessions()
         self.assertEqual(h._last_status, 400)
 
+    def test_rejects_missing_required_fields_in_post_prompts(self):
+        h = MockHandler()
+        # Missing 'id' or 'version'
+        payload = {"status": "active"}
+        h._set_body(json.dumps(payload).encode())
+        h.handle_post_prompts()
+        self.assertEqual(h._last_status, 400)
+
 
 class TestNotFound(unittest.TestCase):
     def test_delete_nonexistent_session_returns_404(self):

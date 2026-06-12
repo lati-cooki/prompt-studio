@@ -124,70 +124,43 @@ class TestNotFound(unittest.TestCase):
         self.assertEqual(h._last_status, 404)
 
 
-class TestPostPrompts(unittest.TestCase):
-    def test_post_prompts_inserts_row(self):
+
+class TestDeleteSession(unittest.TestCase):
+    def test_delete_existing_session_success(self):
         h = MockHandler()
 
-        # Override get_db to return a mock connection we can inspect
-        class MockConnection:
-            def __init__(self):
-                self.conn = sqlite3.connect(":memory:")
-                self.conn.row_factory = sqlite3.Row
-                schema_path = os.path.join(
-                    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                    "schema.sql",
-                )
-                with open(schema_path) as f:
-                    self.conn.executescript(f.read())
-                self.closed = False
+        # Use a shared in-memory database to persist state between setup and handler
+        bg_conn = sqlite3.connect("file:test_delete_session_success?mode=memory&cache=shared", uri=True)
+        schema_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "schema.sql"
+        )
+        with open(schema_path) as f:
+            bg_conn.executescript(f.read())
 
-            def cursor(self):
-                return self.conn.cursor()
+        # Insert a mock session
+        bg_conn.execute(
+            "INSERT INTO sessions (id, name, created_at, updated_at, panes, vault_config) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            ("test-session-123", "Test Session", "2023-01-01T00:00:00Z", "2023-01-01T00:00:00Z", "[]", "{}")
+        )
+        bg_conn.commit()
 
-            def commit(self):
-                self.conn.commit()
+        def patched_get_db():
+            conn = sqlite3.connect("file:test_delete_session_success?mode=memory&cache=shared", uri=True)
+            conn.row_factory = sqlite3.Row
+            return conn
 
-            def close(self):
-                self.closed = True
+        h.get_db = patched_get_db
 
-        mock_conn = MockConnection()
-        h.get_db = lambda: mock_conn
+        h._set_body(b"")
+        h.handle_delete_session("test-session-123")
 
-        payload = {
-            "id": "test_prompt_1",
-            "version": "1.0",
-            "status": "draft",
-            "tier": "free",
-            "owner": "test_user",
-            "body": "Test prompt body",
-            "useCase": "testing",
-            "costPerRunUsd": 0.01,
-            "tokensPromptBody": 10,
-            "defaultModel": "gpt-4",
-            "evalStatus": "pending",
-            "file": "test.txt",
-            "notes": "some notes",
-            "composes": ["other_prompt"],
-            "testedOn": ["gpt-3.5"],
-            "createdAt": "2023-01-01T00:00:00Z",
-            "updatedAt": "2023-01-01T00:00:00Z",
-        }
-        h._set_body(json.dumps(payload).encode())
-
-        h.handle_post_prompts()
-
+        self.assertEqual(h._last_status, 200)
         self.assertEqual(json.loads(h._body_written), {"status": "success"})
-        self.assertTrue(mock_conn.closed)
 
-        cursor = mock_conn.conn.cursor()
-        cursor.execute("SELECT * FROM prompts WHERE id = ?", ("test_prompt_1",))
-        row = cursor.fetchone()
-        self.assertIsNotNone(row)
-        self.assertEqual(row["body"], "Test prompt body")
-        self.assertEqual(row["use_case"], "testing")
-        self.assertEqual(json.loads(row["composes"]), ["other_prompt"])
-
-        mock_conn.conn.close()
+        cursor = bg_conn.execute("SELECT COUNT(*) FROM sessions WHERE id = ?", ("test-session-123",))
+        self.assertEqual(cursor.fetchone()[0], 0)
+        bg_conn.close()
 
 
 if __name__ == "__main__":

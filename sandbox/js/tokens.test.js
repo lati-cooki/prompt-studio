@@ -4,6 +4,14 @@ import { approxTokens, sumMessages, breakdown, computeUsed } from "./tokens.js";
 
 test("approxTokens: empty string is 0", () => {
   assert.equal(approxTokens(""), 0);
+  assert.equal(approxTokens(''), 0);
+});
+
+test("approxTokens: string with only whitespaces counts as tokens", () => {
+  // 1 space -> 1 token
+  assert.equal(approxTokens(" "), 1);
+  assert.equal(approxTokens("\n"), 1);
+  assert.equal(approxTokens("    "), 1); // 4 spaces / 4 = 1 token
 });
 
 test("approxTokens: short string rounds up via /4", () => {
@@ -19,6 +27,9 @@ test("approxTokens: long string", () => {
 test("approxTokens: handles non-string input as 0", () => {
   assert.equal(approxTokens(null),      0);
   assert.equal(approxTokens(undefined), 0);
+  assert.equal(approxTokens(123),       0);
+  assert.equal(approxTokens([]),        0);
+  assert.equal(approxTokens({}),        0);
 });
 
 test("sumMessages: empty array is 0", () => {

@@ -539,6 +539,10 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         data = self.read_json_body()
         if data is None:
             return
+        required = ("id", "version")
+        if not all(k in data for k in required):
+            self.send_error(400, "Missing required fields")
+            return
         conn = self.get_db()
         try:
             cursor = conn.cursor()

@@ -2,7 +2,7 @@ import { createPaneState }     from "./state.js";
 import { createPane }          from "./pane.js";
 import { sendToPanes }         from "./send.js";
 import { pingVaultHealth, reindexVault } from "./vault.js";
-import { ALL_MODELS, FRONTIER_MODELS, LM_STUDIO_URL, getActiveModelKey } from "./config.js";
+import { ALL_MODELS, LM_STUDIO_URL, getActiveModelKey } from "./config.js";
 import { renderSaveSlot, renderSessionList } from "./session-rail.js";
 import { buildMarkdown, triggerMarkdownDownload, slugify } from "./export.js";
 import { createSessionsStore } from "./sessions.js";

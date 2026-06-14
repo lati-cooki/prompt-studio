@@ -124,5 +124,73 @@ class TestAuthorClistaLog(unittest.TestCase):
             seal.author_clista_log(self._data(), "/tmp/x")
 
 
+class _Resp:
+    def __init__(self, body):
+        self._b = json.dumps(body).encode()
+    def read(self):
+        return self._b
+    def __enter__(self):
+        return self
+    def __exit__(self, *a):
+        return False
+
+
+class TestThreadHubWrite(unittest.TestCase):
+    @patch("seal.urllib.request.urlopen")
+    def test_writes_thread_and_records_then_verifies(self, urlopen):
+        urlopen.side_effect = [
+            _Resp({"slug": "ship-beta"}),
+            _Resp({"record_hash": "sha256:a", "seq": 1}),
+            _Resp({"record_hash": "sha256:b", "seq": 2}),
+            _Resp({"valid": True, "records": 3, "head": "sha256:head"}),
+        ]
+        events = os.path.join(os.path.dirname(__file__), "_seal_events.ndjson")
+        with open(events, "w") as f:
+            f.write(json.dumps({"event_type": "ThreadCreated"}) + "\n")
+            f.write(json.dumps({"event_type": "EvidenceCommitted"}) + "\n")
+        try:
+            out = seal.write_to_threadhub(events, "Ship?", "Ship?", "id_author")
+        finally:
+            os.remove(events)
+        self.assertEqual(out, {"slug": "ship-beta", "citationHash": "sha256:head"})
+        self.assertEqual(urlopen.call_count, 4)
+
+    @patch("seal.urllib.request.urlopen",
+           side_effect=seal.urllib.error.URLError("refused"))
+    def test_threadhub_down_raises_unreachable(self, urlopen):
+        events = os.path.join(os.path.dirname(__file__), "_seal_events2.ndjson")
+        with open(events, "w") as f:
+            f.write(json.dumps({"event_type": "ThreadCreated"}) + "\n")
+        try:
+            with self.assertRaises(seal.SealError) as ctx:
+                seal.write_to_threadhub(events, "t", "q", "id_author")
+        finally:
+            os.remove(events)
+        self.assertEqual(ctx.exception.status, 502)
+        self.assertEqual(ctx.exception.extra.get("code"), "threadhub_unreachable")
+
+
+class TestEnsureAuthor(unittest.TestCase):
+    def setUp(self):
+        self._orig = seal.AUTHOR_CACHE
+        seal.AUTHOR_CACHE = os.path.join(os.path.dirname(__file__), "_seal_author_test")
+        if os.path.exists(seal.AUTHOR_CACHE):
+            os.remove(seal.AUTHOR_CACHE)
+
+    def tearDown(self):
+        if os.path.exists(seal.AUTHOR_CACHE):
+            os.remove(seal.AUTHOR_CACHE)
+        seal.AUTHOR_CACHE = self._orig
+
+    @patch("seal.urllib.request.urlopen")
+    def test_creates_and_caches_author(self, urlopen):
+        urlopen.return_value = _Resp({"id": "id_new"})
+        first = seal.ensure_author()
+        second = seal.ensure_author()  # cached; no 2nd POST
+        self.assertEqual(first, "id_new")
+        self.assertEqual(second, "id_new")
+        self.assertEqual(urlopen.call_count, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

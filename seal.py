@@ -85,6 +85,55 @@ def author_clista_log(data, cwd):
     return os.path.join(cwd, ".clista", "events.ndjson")
 
 
+def _th(method, path, body=None):
+    url = f"http://localhost:{THREADHUB_PORT}{path}"
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    headers = {"Content-Type": "application/json"} if data is not None else {}
+    req = urllib.request.Request(url, data=data, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        status = 429 if e.code == 429 else 502
+        raise SealError(f"ThreadHub {method} {path} returned {e.code}",
+                        status=status, extra={"code": "threadhub_http_error"})
+    except urllib.error.URLError:
+        raise SealError("ThreadHub is not reachable", status=502,
+                        extra={"code": "threadhub_unreachable"})
+
+
+def ensure_author():
+    if os.path.exists(AUTHOR_CACHE):
+        with open(AUTHOR_CACHE) as f:
+            cached = f.read().strip()
+        if cached:
+            return cached
+    author_id = _th("POST", "/identities",
+                    {"display_name": "Prompt Studio", "kind": "agent"})["id"]
+    with open(AUTHOR_CACHE, "w") as f:
+        f.write(author_id)
+    return author_id
+
+
+def write_to_threadhub(events_path, title, question, author_id):
+    slug = _th("POST", "/threads",
+               {"title": title, "question": question, "author": author_id})["slug"]
+    try:
+        with open(events_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                _th("POST", f"/t/{slug}/records",
+                    {"author": author_id, "kind": "clista.event",
+                     "payload": json.loads(line)})
+    except SealError as e:
+        e.extra["partialSlug"] = slug
+        raise
+    verify = _th("GET", f"/t/{slug}/verify")
+    return {"slug": slug, "citationHash": verify.get("head")}
+
+
 def validate_payload(payload):
     if not isinstance(payload, dict):
         raise SealValidationError({"payload": "must be a JSON object"})

@@ -892,7 +892,12 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
     const evidence = Array.from(document.querySelectorAll("#seal-evidence .seal-row")).map(r => ({
       source: r.querySelector(".seal-ev-source").value,
       finding: r.querySelector(".seal-ev-finding").value,
-    }));
+    })).filter(e => e.source.trim() && e.finding.trim());
+    if (!evidence.length) {
+      $("seal-msg").style.color = "#a83830";
+      $("seal-msg").textContent = "Add at least one evidence item (source + finding).";
+      return;
+    }
     const objections = Array.from(document.querySelectorAll("#seal-objections .seal-obj-text"))
       .map(i => ({ text: i.value })).filter(o => o.text.trim());
     const payload = {
@@ -902,6 +907,8 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
       decidedBy: $("seal-decidedby").value,
       evidence, objections,
     };
+    const btn = $("seal-submit");
+    btn.disabled = true;
     $("seal-msg").style.color = "#5c636b";
     $("seal-msg").textContent = "Sealing…";
     let res, body;
@@ -914,8 +921,10 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
     } catch (e) {
       $("seal-msg").style.color = "#a83830";
       $("seal-msg").textContent = "Network error.";
+      btn.disabled = false;
       return;
     }
+    btn.disabled = false;
     if (res.ok) {
       $("seal-msg").style.color = "#2e7048";
       $("seal-msg").innerHTML = "✓ Sealed · " + esc(body.slug) + " · " +

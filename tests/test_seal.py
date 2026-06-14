@@ -207,5 +207,33 @@ class TestEnsureAuthor(unittest.TestCase):
         self.assertEqual(urlopen.call_count, 1)
 
 
+class TestSealDecision(unittest.TestCase):
+    def _payload(self):
+        return {
+            "question": "Ship?", "decision": "Ship redacted", "decidedBy": "Troy",
+            "evidence": [{"source": "logs", "finding": "82% FAQ"}],
+            "objections": [],
+        }
+
+    @patch("seal.write_to_threadhub", return_value={"slug": "ship", "citationHash": "sha256:h"})
+    @patch("seal.ensure_author", return_value="id_author")
+    @patch("seal.author_clista_log", return_value="/tmp/x/.clista/events.ndjson")
+    def test_happy_path(self, author, ensure, write):
+        out = seal.seal_decision(self._payload())
+        self.assertEqual(out, {"slug": "ship", "citationHash": "sha256:h"})
+        self.assertTrue(author.called and write.called)
+
+    def test_invalid_payload_propagates(self):
+        with self.assertRaises(seal.SealValidationError):
+            seal.seal_decision({"evidence": []})
+
+    @patch("seal.ensure_author")
+    @patch("seal.author_clista_log", side_effect=seal.SealError("ClisTa validation failed"))
+    def test_authoring_failure_skips_threadhub(self, author, ensure):
+        with self.assertRaises(seal.SealError):
+            seal.seal_decision(self._payload())
+        ensure.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

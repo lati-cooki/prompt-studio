@@ -182,3 +182,14 @@ def validate_payload(payload):
         "evidence": evidence,
         "objections": objections,
     }
+
+
+def seal_decision(payload):
+    data = validate_payload(payload)
+    tmp = tempfile.mkdtemp(prefix="seal-")
+    try:
+        events_path = author_clista_log(data, tmp)
+        author_id = ensure_author()
+        return write_to_threadhub(events_path, data["title"], data["question"], author_id)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)

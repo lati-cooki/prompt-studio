@@ -284,6 +284,15 @@ function showView(raw) {
   if (location.hash.replace(/^#/, '') !== view) location.hash = view;
 }
 
+document.querySelectorAll('.nav-item[data-view]').forEach((el) =>
+  el.addEventListener('click', () => showView(el.dataset.view)));
+const $homeStart = document.getElementById('home-start-btn');
+if ($homeStart) $homeStart.addEventListener('click', () => showView('deliberate'));
+const $homeNew = document.getElementById('home-new-btn');
+if ($homeNew) $homeNew.addEventListener('click', () => { document.getElementById('new-session')?.click(); showView('deliberate'); });
+const $navSessions = document.getElementById('nav-sessions');
+if ($navSessions) $navSessions.addEventListener('click', () => showView('deliberate'));
+
 // ── Tab switching ───────────────────────────────────────
 function switchTab(tab) {
   showView(tab === 'registry' ? 'registry' : 'deliberate');
@@ -656,4 +665,4 @@ async function init() {
 init();
 
 window.addEventListener('hashchange', () => showView(location.hash));
-showView(location.hash || 'deliberate');
+showView(location.hash || 'home');

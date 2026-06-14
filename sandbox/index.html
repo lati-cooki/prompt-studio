@@ -685,9 +685,35 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
 
 /* ── Directive composer label ── */
 .composer-directive-hint { font-size: 10px; color: var(--ink-4); font-family: var(--mono); }
+.sidebar { width: 200px; flex-shrink: 0; background: var(--paper-3); border-right: 1px solid var(--line);
+  display: flex; flex-direction: column; padding: 16px 0; gap: 2px; }
+.sidebar-brand { font-family: var(--sans); font-weight: 600; font-size: 14px; padding: 0 16px 14px; }
+.sidebar-group-label { font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-4); padding: 12px 16px 4px; }
+.nav-item { display: flex; align-items: center; gap: 8px; padding: 7px 16px; font-size: 13px; color: var(--ink-2);
+  cursor: pointer; border: none; background: none; width: 100%; text-align: left; text-decoration: none; font-family: var(--sans); }
+.nav-item:hover { background: var(--paper-2); color: var(--ink); }
+.nav-item.nav-active { background: var(--paper-2); color: var(--ink); box-shadow: inset 2px 0 0 var(--ink); }
+.sidebar-foot { margin-top: auto; padding: 12px 16px 0; font-size: 11px; color: var(--ink-3); border-top: 1px solid var(--line-2); }
+.home-view { max-width: 820px; margin: 0 auto; padding: 56px 24px; overflow-y: auto; }
+.home-steps { display: flex; gap: 14px; margin: 24px 0; }
+.home-step { flex: 1; border: 1px solid var(--line); border-radius: 6px; padding: 14px; font-size: 13px; }
+.home-step .ex { display: block; margin-top: 8px; font-style: italic; color: var(--ink-3); border-left: 2px solid var(--line); padding-left: 8px; font-size: 12px; }
+.home-cta { display: inline-block; background: var(--ink); color: #fff; border: none; padding: 9px 18px; border-radius: 5px; font: inherit; cursor: pointer; }
 </style>
 </head>
 <body>
+
+<aside class="sidebar" id="app-sidebar">
+  <div class="sidebar-brand">▣ Prompt Studio</div>
+  <div class="sidebar-group-label">Workflow</div>
+  <button class="nav-item" data-view="home" type="button">⌂ Home</button>
+  <button class="nav-item" data-view="deliberate" type="button">Deliberate</button>
+  <button class="nav-item" data-view="decisions" type="button">Decisions</button>
+  <div class="sidebar-group-label">Library</div>
+  <button class="nav-item" data-view="registry" type="button">Registry</button>
+  <button class="nav-item" id="nav-sessions" type="button">Sessions</button>
+  <div class="sidebar-foot" id="sidebar-foot">— loading…</div>
+</aside>
 
 <!-- ── Left Rail ───────────────────────────────── -->
 <aside class="rail" id="sessions-rail">
@@ -787,6 +813,29 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
     </div>
     <button class="stop-btn" id="stop-btn" hidden>⏹ Stop</button>
   </div>
+
+  <section class="home-view" id="view-home" style="display:none">
+    <div id="home-empty">
+      <h1 style="font-weight:600;margin:0 0 4px">Prompt Studio</h1>
+      <p style="color:var(--ink-3);margin:0">Turn a conversation into a decision you can trust — fully local.</p>
+      <div class="home-steps">
+        <div class="home-step"><strong>① Deliberate</strong><br>Chat a decision through with your chosen model.
+          <span class="ex">e.g. "Should we ship the support beta?" — you weigh that 82% of tickets are FAQ-shaped against a privacy review flagging PII risk.</span></div>
+        <div class="home-step"><strong>② Shape</strong><br>✨ Suggest the structure, review, seal it.
+          <span class="ex">Your model drafts: decision = "ship to redacted tickets only", evidence = the 82% finding, surviving objection = "privacy risk remains." You edit, then Seal.</span></div>
+        <div class="home-step"><strong>③ Notarize</strong><br>A signed, verifiable record lands in Decisions.
+          <span class="ex">→ ship-the-support-beta · 9 records · ✓ chain valid — citeable by hash, forever.</span></div>
+      </div>
+      <button class="home-cta" id="home-start-btn" type="button">Start a session →</button>
+      <p style="color:var(--ink-4);margin-top:12px;font-size:12px">Local &amp; frontier models supported.</p>
+    </div>
+    <div id="home-hub" style="display:none">
+      <h1 style="font-weight:600;margin:0 0 12px">Home</h1>
+      <div class="home-steps" style="font-size:12px"><div class="home-step">① Deliberate</div><div class="home-step">② Shape</div><div class="home-step">③ Notarize</div></div>
+      <button class="home-cta" id="home-new-btn" type="button">+ New session</button>
+      <div id="home-recent" style="margin-top:18px"></div>
+    </div>
+  </section>
 
   <!-- Pane container (eval mode) -->
   <main class="pane-container" id="pane-container" style="flex:1;display:flex;min-height:0;overflow:hidden;"></main>

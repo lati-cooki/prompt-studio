@@ -101,6 +101,8 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             self.serve_file('sandbox/index.html', 'text/html')
         elif self.path in ('/registry', '/registry/'):
             self.serve_file('registry/interface/registry_widget.html', 'text/html')
+        elif self.path in ('/threads', '/threads/'):
+            self.serve_file('threads/interface/threads_widget.html', 'text/html')
         elif self.path.startswith('/js/'):
             self.serve_file('sandbox' + self.path, 'application/javascript')
         else:

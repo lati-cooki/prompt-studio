@@ -194,5 +194,14 @@ class TestThreadsProxy(unittest.TestCase):
         self.assertEqual(mock_open.call_args[0][0], "http://localhost:8110/t/founding.json")
 
 
+class TestThreadsRoute(unittest.TestCase):
+    def test_threads_route_serves_widget(self):
+        h = MockHandler()
+        h.path = '/threads'
+        h.do_GET()
+        self.assertEqual(h._last_status, 200)
+        self.assertTrue(len(h._body_written) > 0)
+
+
 if __name__ == "__main__":
     unittest.main()

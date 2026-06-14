@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Threads</title>
+<style>
+:root {
+  --paper-2: #ede9e0; --ink: #0c0f14; --ink-3: #5c636b; --ink-4: #9aa0a8;
+  --line: rgba(12,15,20,0.13); --green: #2e7048; --red: #a83830;
+  --sans: 'Inter Tight', -apple-system, sans-serif;
+  --mono: ui-monospace, 'JetBrains Mono', monospace;
+}
+*, *::before, *::after { box-sizing: border-box; }
+body { font-family: var(--sans); font-size: 13px; color: var(--ink);
+  background: var(--paper-2); margin: 0; padding: 48px 24px 72px; }
+.wrap { max-width: 820px; margin: 0 auto; }
+h1 { font-weight: 600; font-size: 22px; margin: 0 0 4px; }
+.sub { color: var(--ink-3); margin: 0 0 28px; }
+a.back { color: var(--ink-3); text-decoration: none; cursor: pointer; }
+.row { display: flex; justify-content: space-between; gap: 12px;
+  padding: 12px 0; border-bottom: 1px solid var(--line); cursor: pointer; }
+.row:hover { opacity: 0.75; }
+.row .title { font-weight: 500; }
+.row .meta { color: var(--ink-3); font-size: 12px; }
+.badge { font-family: var(--mono); font-size: 11px; white-space: nowrap; }
+.badge.ok { color: var(--green); }
+.badge.bad { color: var(--red); }
+.badge.pending { color: var(--ink-4); }
+.rec { padding: 8px 0; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 12px; }
+.rec .k { color: var(--ink-3); }
+.err { color: var(--red); padding: 16px 0; }
+.hash { color: var(--ink-4); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div id="header">
+    <h1>Threads</h1>
+    <p class="sub">Signed decision records from ThreadHub. <span class="badge">trusted: false — chain verification proves structure, never content.</span></p>
+  </div>
+  <div id="view"></div>
+</div>
+<script>
+const view = document.getElementById('view');
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"]/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
+function short(h) { return h ? esc(String(h).slice(0, 18)) + '…' : ''; }
+
+async function getJSON(path) {
+  const res = await fetch(path);
+  if (!res.ok) {
+    let code = res.status;
+    try { code = (await res.json()).code || code; } catch (e) {}
+    throw new Error(code);
+  }
+  return res.json();
+}
+
+async function showList() {
+  view.innerHTML = '<p class="sub">Loading…</p>';
+  let threads;
+  try {
+    threads = await getJSON('/api/threads');
+  } catch (e) {
+    view.innerHTML = '<p class="err">ThreadHub sidecar not running — start it via the launcher. (' + esc(e.message) + ')</p>';
+    return;
+  }
+  if (!threads.length) { view.innerHTML = '<p class="sub">No threads yet.</p>'; return; }
+  view.innerHTML = threads.map(t => `
+    <div class="row" data-slug="${esc(t.slug)}">
+      <span>
+        <div class="title">${esc(t.title)}</div>
+        <div class="meta">${esc(t.created_at)} · ${esc(t.created_by)}</div>
+      </span>
+      <span class="badge pending" data-verify="${esc(t.slug)}">checking…</span>
+    </div>`).join('');
+  view.querySelectorAll('.row').forEach(r =>
+    r.addEventListener('click', () => showDetail(r.dataset.slug)));
+  threads.forEach(t => fillBadge(t.slug));
+}
+
+async function fillBadge(slug) {
+  const el = view.querySelector(`[data-verify="${CSS.escape(slug)}"]`);
+  if (!el) return;
+  try {
+    const v = await getJSON('/api/threads/' + encodeURIComponent(slug) + '/verify');
+    el.className = 'badge ' + (v.valid ? 'ok' : 'bad');
+    el.textContent = (v.valid ? '✓ chain valid' : '✗ broken') + ' · ' + v.records + ' records';
+  } catch (e) {
+    el.className = 'badge bad';
+    el.textContent = '✗ ' + esc(e.message);
+  }
+}
+
+async function showDetail(slug) {
+  view.innerHTML = '<p class="sub"><a class="back" id="back">← all threads</a></p><p class="sub">Loading…</p>';
+  document.getElementById('back').addEventListener('click', showList);
+  let chain, verify;
+  try {
+    [chain, verify] = await Promise.all([
+      getJSON('/api/threads/' + encodeURIComponent(slug)),
+      getJSON('/api/threads/' + encodeURIComponent(slug) + '/verify'),
+    ]);
+  } catch (e) {
+    view.innerHTML = '<p class="sub"><a class="back" id="back2">← all threads</a></p><p class="err">Could not load thread (' + esc(e.message) + ')</p>';
+    document.getElementById('back2').addEventListener('click', showList);
+    return;
+  }
+  const badge = verify.valid
+    ? `<span class="badge ok">✓ chain verified · ${verify.records} records</span>`
+    : `<span class="badge bad">✗ chain broken · ${esc((verify.problems || []).join('; '))}</span>`;
+  const rows = chain.map(r => `
+    <div class="rec">
+      <span class="k">seq ${esc(r.seq)} · ${esc(r.kind)} · ${esc(r.author)}</span><br>
+      <span class="hash">${esc(r.recorded_at)} · prev ${short(r.prev)}</span>
+    </div>`).join('');
+  view.innerHTML = `
+    <p class="sub"><a class="back" id="back3">← all threads</a></p>
+    <h1 style="font-size:18px">${esc(slug)}</h1>
+    <p>${badge} · head ${short(verify.head)}</p>
+    ${rows}`;
+  document.getElementById('back3').addEventListener('click', showList);
+}
+
+showList();
+</script>
+</body>
+</html>

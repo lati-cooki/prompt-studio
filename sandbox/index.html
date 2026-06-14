@@ -709,6 +709,28 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
 .home-flow { font-family: var(--mono); font-size: 11px; color: var(--ink-4); margin-top: 10px; }
 .sessions-view { max-width: 720px; margin: 0 auto; padding: 48px 24px; overflow-y: auto; }
 .sessions-view-empty { color: var(--ink-4); font-size: 13px; padding: 16px 0; }
+
+/* ── Deliberate declutter ─────────────────────────────────
+   The shell sidebar + Home + Sessions views now own the brand, New-session,
+   Registry link, and the session list — so hide those duplicates in the rail.
+   The rail becomes a calm "Setup" column: Active Prompt · Models · Save/Export · Vault.
+   Element ids are kept in the DOM (the app JS still reads them); only hidden. */
+#sessions-rail .rail-header,
+#sessions-rail .rail-new-wrap,
+#sessions-rail .rail-registry-wrap,
+#sessions-rail .rail-saved-label,
+#sessions-rail #sessions-list,
+#sessions-rail #sessions-save-slot { display: none !important; }
+
+/* Slimmer, calmer rail */
+#sessions-rail { width: 232px; }
+#sessions-rail .rail-prompt-section,
+#sessions-rail .rail-model-section { padding-top: 4px; }
+
+/* The registry-draft panel is an advanced "save prompt to registry" workflow,
+   not part of the deliberate→shape→notarize flow — hide it by default so
+   Deliberate is just: setup rail · conversation · input. */
+#registry-panel-mount { display: none !important; }
 </style>
 </head>
 <body>

@@ -36,6 +36,15 @@ citation hash.
 - **Build approach: ClisTa CLI orchestration → ThreadHub ingest.** ClisTa authors and validates the
   log (it owns the schema); we never hand-craft ClisTa JSON or modify ClisTa/ThreadHub.
 - **No prefill.** v1 form is fully manual (no auto-extraction from the session); that is Phase 3.
+- **Decision model: decision-as-claim (NOT a formal `DecisionMerged`).** Verified against the live
+  `clista` CLI: a formal authorized `decision merge` requires the decider to hold `decision_owner`
+  authority, plus supporting *assumptions* and a *review* — none of which the minimal form captures,
+  and a single-author self-review is the "vibes with hashes" anti-pattern ClisTa warns against.
+  Instead, the seal records the decision as a **central claim** (the decision text, citing the
+  evidence) with the surviving objection(s) attached. This validates clean (`clista validate` →
+  `valid: true`) and is honest: a recorded, evidenced deliberation, not a faked formal authorization.
+  The formal authorized-decision flow is a deferred enrichment (Phase 2.5/3, once assumptions are
+  cheap to capture and a real review actor exists).
 
 ## Constraints & principles
 
@@ -84,15 +93,20 @@ helpers. Responsibilities:
   `decidedBy`, and `evidence` with ≥1 item each having `source` + `finding`. `objections` optional.
 - **Ensure identity:** look up / create the custodial ThreadHub identity for the author (declare once,
   cache the id; idempotent).
-- **Author the ClisTa log** into a fresh temp events file via the CLI sequence (exact flags verified at
-  plan time — see Open Items): `thread create --title --question` → `participant declare --name` →
-  for each evidence `evidence commit --source --finding` (collect evidence ids) → `claim create --text
-  <decision> --evidence <evidenceIds>` → `decision open --proposal <decision>` → for each objection
-  `objection raise --target <id> --text` → `decision merge --decider <participant>`.
-- **Validate:** `clista validate --events <tmp>`; abort (no ThreadHub write) on non-zero.
-- **Ingest:** `threadhub ingest --events <tmp> --author <id> --title <title>`; parse the returned
-  thread slug + head/citation hash.
-- **Return** `{slug, citationHash}`. Clean up the temp file.
+- **Author the ClisTa log** in a fresh temp working directory (ClisTa authoring appends to
+  `<cwd>/.clista/events.ndjson`; each command prints the created object as JSON to stdout for id
+  capture). The verified sequence (decision-as-claim):
+  1. `clista thread create --title <title> --question <question>` → capture `thread.id`.
+  2. `clista participant declare --name <decidedBy> --thread <tid>` → capture `participant.id`.
+  3. for each evidence item: `clista evidence commit --thread <tid> --source <s> --finding <f>` → capture `evidence.id`.
+  4. `clista claim create --thread <tid> --text <decision> --evidence <evd1,evd2,...>` → capture `claim.id` (multiple evidence ids comma-separated).
+  5. for each objection: `clista objection raise --thread <tid> --participant <pid> --target <claimId> --text <objection>`.
+  All commands run with `cwd` = the temp dir so they share one `.clista/events.ndjson`.
+- **Validate:** `clista validate` (cwd = temp dir); parse stdout JSON `valid`; abort (no ThreadHub
+  write) when `valid` is false, surfacing `errors`.
+- **Ingest:** `threadhub ingest --events <tmp>/.clista/events.ndjson --author <id> --title <title> --slug <slug>`;
+  parse the returned `{thread, slug, records, head}` (head is the citation hash).
+- **Return** `{slug, citationHash}` (citationHash = `head`). Clean up the temp dir.
 
 ### 3. `server.py` route
 `POST /api/threads/seal`: read+size-limit the JSON body (existing `read_json_body`), call
@@ -107,9 +121,9 @@ orchestration failure → `500 {error}`.
 | Title | thread title (also passed to `threadhub ingest --title`) |
 | Question | `thread create --question` |
 | Evidence[] (source, finding) | `evidence commit --source --finding` (one per item; collect ids) |
-| Decision | `claim create --text <decision> --evidence <ids>` + `decision open --proposal <decision>` |
-| Objection[] | `objection raise --target <claim/decision id> --text` (one per item) |
-| Decided by | `participant declare --name` + `decision merge --decider <participant>` |
+| Decision | central `claim create --text <decision> --evidence <ids>` (decision-as-claim; no `decision merge`) |
+| Objection[] | `objection raise --participant <pid> --target <claimId> --text` (one per item) |
+| Decided by | `participant declare --name` (the authoring participant `pid`) |
 
 ## Error handling
 
@@ -141,10 +155,16 @@ orchestration failure → `500 {error}`.
 
 ## Open items for the implementation plan
 
-- Verify the exact `clista` CLI mechanics for authoring a single event log: how each command targets
-  one events file (a `--events <path>` flag vs a `.clista/` working-dir convention), and the exact
-  flag names/output formats for `evidence commit` (id capture), `claim create`, `decision open`,
-  `objection raise`, and `decision merge`. Confirm against the live CLI before writing task code.
-- Confirm `threadhub ingest` output format for reliably parsing the new slug + citation hash.
-- Confirm how `participant declare` / identity is represented in a from-scratch authored log and how it
-  maps onto the custodial ThreadHub `--author` identity.
+All previously-open CLI mechanics were verified against the live tools during planning:
+- Authoring persists to `<cwd>/.clista/events.ndjson` (run each command with `cwd` = the temp dir);
+  `--events` is read-only and not used for authoring.
+- Id capture from stdout JSON: `thread.id`, `participant.id`, `evidence.id`, `claim.id`. Multiple
+  evidence ids on `claim create --evidence` are comma-separated.
+- `clista validate` (in the temp dir) returns `{valid, errors}`; the decision-as-claim sequence
+  validates `valid: true`.
+- `threadhub ingest` returns `{thread, slug, records, head}`; `head` is the citation hash.
+- Custodial author: a ThreadHub identity (`threadhub identity create --name <…> --kind agent`) is the
+  `--author` for `ingest`; the in-log ClisTa participant (`par_<name>`) is independent of it.
+
+Remaining for the plan to nail in code: shell-escaping of free-text fields passed to the CLIs, and the
+exact temp-dir lifecycle/cleanup.

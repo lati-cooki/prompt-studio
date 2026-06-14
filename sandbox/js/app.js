@@ -259,6 +259,7 @@ const $sendHint      = document.getElementById("send-hint");
 const $railModeTag   = document.getElementById("rail-mode-tag");
 const $sessionsRail  = document.getElementById("sessions-rail");
 const $topbar        = document.querySelector(".topbar");
+const $sessionsViewList = document.getElementById('sessions-view-list');
 
 // ── Home hub renderer ────────────────────────────────────
 async function renderHome() {
@@ -281,6 +282,32 @@ async function renderHome() {
     recent.innerHTML = `<div class="sidebar-group-label" style="padding-left:0">Recent decisions <a href="javascript:void(0)" id="home-see-decisions" style="text-transform:none">→ all</a></div>${items || '<div style="color:var(--ink-4);font-size:12px">none yet</div>'}`;
     document.getElementById('home-see-decisions')?.addEventListener('click', () => showView('decisions'));
   }
+}
+
+// ── Sessions view renderer ───────────────────────────────
+async function renderSessions() {
+  if (!$sessionsViewList) return;
+  let sessions = [];
+  try { sessions = await sessionsStore.load(); } catch (e) { sessions = []; }
+  if (!sessions.length) {
+    $sessionsViewList.innerHTML = '<div class="sessions-view-empty">No saved sessions yet.</div>';
+    return;
+  }
+  renderSessionList($sessionsViewList, sessions, {
+    activeId: activeSessionId,
+    onClick: (entry) => {
+      activeSessionId = entry.id;
+      $topbarSession.textContent = entry.name;
+      loadEntry(entry);
+      refreshSessionList();
+      showView('deliberate');
+    },
+    onDelete: async (entry) => {
+      await sessionsStore.delete(entry.id);
+      renderSessions();
+      refreshSessionList();
+    },
+  });
 }
 
 // ── View router ─────────────────────────────────────────
@@ -306,11 +333,15 @@ function showView(raw) {
   // Home view section (added next task; guard for absence)
   const homeEl = document.getElementById('view-home');
   if (homeEl) homeEl.style.display = isHome ? "" : "none";
+  // Sessions view section
+  const sessionsEl = document.getElementById('view-sessions');
+  if (sessionsEl) sessionsEl.style.display = view === 'sessions' ? "" : "none";
   // Sidebar active state (added next task; guard for absence)
   document.querySelectorAll('[data-view]').forEach((el) =>
     el.classList.toggle('nav-active', el.dataset.view === view));
   if (location.hash.replace(/^#/, '') !== view) location.hash = view;
   if (view === 'home') renderHome();
+  if (view === 'sessions') renderSessions();
 }
 
 document.querySelectorAll('.nav-item[data-view]').forEach((el) =>
@@ -319,8 +350,8 @@ const $homeStart = document.getElementById('home-start-btn');
 if ($homeStart) $homeStart.addEventListener('click', () => showView('deliberate'));
 const $homeNew = document.getElementById('home-new-btn');
 if ($homeNew) $homeNew.addEventListener('click', () => { document.getElementById('new-session')?.click(); showView('deliberate'); });
-const $navSessions = document.getElementById('nav-sessions');
-if ($navSessions) $navSessions.addEventListener('click', () => showView('deliberate'));
+const $sessionsViewNew = document.getElementById('sessions-view-new');
+if ($sessionsViewNew) $sessionsViewNew.addEventListener('click', () => { document.getElementById('new-session')?.click(); showView('deliberate'); });
 
 // ── Tab switching ───────────────────────────────────────
 function switchTab(tab) {

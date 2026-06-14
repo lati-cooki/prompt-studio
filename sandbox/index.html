@@ -834,14 +834,6 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
         <div class="home-step"><strong>③ Notarize</strong><br>A signed, verifiable record lands in Decisions.
           <span class="ex">→ ship-the-support-beta · 9 records · ✓ chain valid — citeable by hash, forever.</span></div>
       </div>
-      <div style="font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-4);margin:18px 0 6px">How the pieces work together</div>
-      <div class="home-pieces">
-        <details open><summary><strong>Prompt sandbox</strong> — where you deliberate</summary><p>Chat a decision through with your chosen model. Load a system prompt from the Registry to set the model's role.</p></details>
-        <details><summary><strong>Registry</strong> — your versioned prompt library</summary><p>Save, version, and grade reusable system prompts; load one into the sandbox to start a deliberation from a known footing.</p></details>
-        <details><summary><strong>ClisTa Protocol</strong> — shapes the decision</summary><p>Turns the conversation into a validated, accountable decision log — question, decision, evidence, and surviving objections — checked for structural validity.</p></details>
-        <details><summary><strong>ThreadHub</strong> — notarizes &amp; stores it</summary><p>Signs and hash-chains the ClisTa log into a permanent, verifiable record. The Decisions view reads it back; cite a decision by its hash.</p></details>
-      </div>
-      <p class="home-flow">prompt → deliberate → ClisTa shapes → ThreadHub notarizes → Decisions</p>
       <button class="home-cta" id="home-start-btn" type="button">Start a session →</button>
       <p style="color:var(--ink-4);margin-top:12px;font-size:12px">Local &amp; frontier models supported.</p>
     </div>
@@ -851,6 +843,14 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
       <button class="home-cta" id="home-new-btn" type="button">+ New session</button>
       <div id="home-recent" style="margin-top:18px"></div>
     </div>
+    <div style="font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-4);margin:18px 0 6px">How the pieces work together</div>
+    <div class="home-pieces">
+      <details open><summary><strong>Prompt sandbox</strong> — where you deliberate</summary><p>Chat a decision through with your chosen model. Load a system prompt from the Registry to set the model's role.</p></details>
+      <details><summary><strong>Registry</strong> — your versioned prompt library</summary><p>Save, version, and grade reusable system prompts; load one into the sandbox to start a deliberation from a known footing.</p></details>
+      <details><summary><strong>ClisTa Protocol</strong> — shapes the decision</summary><p>Turns the conversation into a validated, accountable decision log — question, decision, evidence, and surviving objections — checked for structural validity.</p></details>
+      <details><summary><strong>ThreadHub</strong> — notarizes &amp; stores it</summary><p>Signs and hash-chains the ClisTa log into a permanent, verifiable record. The Decisions view reads it back; cite a decision by its hash.</p></details>
+    </div>
+    <p class="home-flow">prompt → deliberate → ClisTa shapes → ThreadHub notarizes → Decisions</p>
   </section>
 
   <section class="sessions-view" id="view-sessions" style="display:none">

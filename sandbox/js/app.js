@@ -16,7 +16,7 @@ import { paneContext } from './seal-extract.js';
 import { createRegistryPanel } from './registry-panel.js';
 import { createModelSelector } from './model-selector.js';
 import * as api from './api.js';
-import { resolveView } from './view.js';
+import { resolveView, homeState } from './view.js';
 
 // ── App state ──────────────────────────────────────────
 const activePaneMap      = {};
@@ -260,6 +260,29 @@ const $railModeTag   = document.getElementById("rail-mode-tag");
 const $sessionsRail  = document.getElementById("sessions-rail");
 const $topbar        = document.querySelector(".topbar");
 
+// ── Home hub renderer ────────────────────────────────────
+async function renderHome() {
+  let sessionCount = 0, decisions = [];
+  try { sessionCount = document.querySelectorAll('#sessions-list > *').length; } catch (e) {}
+  try {
+    const r = await fetch('/api/threads');
+    if (r.ok) decisions = await r.json();
+  } catch (e) { decisions = []; }
+  const state = homeState(sessionCount, Array.isArray(decisions) ? decisions.length : 0);
+  const emptyEl = document.getElementById('home-empty');
+  const hubEl = document.getElementById('home-hub');
+  if (emptyEl) emptyEl.style.display = state === 'empty' ? '' : 'none';
+  if (hubEl) hubEl.style.display = state === 'hub' ? '' : 'none';
+  const recent = document.getElementById('home-recent');
+  if (recent && state === 'hub') {
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const items = (Array.isArray(decisions) ? decisions : []).slice(0, 5)
+      .map((t) => `<div style="padding:4px 0;font-size:12px">✓ ${esc(t.slug)} <span style="color:var(--ink-4)">· ${esc(t.title || '')}</span></div>`).join('');
+    recent.innerHTML = `<div class="sidebar-group-label" style="padding-left:0">Recent decisions <a href="javascript:void(0)" id="home-see-decisions" style="text-transform:none">→ all</a></div>${items || '<div style="color:var(--ink-4);font-size:12px">none yet</div>'}`;
+    document.getElementById('home-see-decisions')?.addEventListener('click', () => showView('decisions'));
+  }
+}
+
 // ── View router ─────────────────────────────────────────
 function showView(raw) {
   const view = resolveView(raw);
@@ -287,6 +310,7 @@ function showView(raw) {
   document.querySelectorAll('[data-view]').forEach((el) =>
     el.classList.toggle('nav-active', el.dataset.view === view));
   if (location.hash.replace(/^#/, '') !== view) location.hash = view;
+  if (view === 'home') renderHome();
 }
 
 document.querySelectorAll('.nav-item[data-view]').forEach((el) =>

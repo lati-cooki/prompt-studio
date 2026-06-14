@@ -594,7 +594,7 @@ async function handleRegistryLoad() {
     const body = await loadRegistryPromptBody(file);
     applyRegistryPromptToPane(stateA, paneA, body);
     $topbarSubtitle.textContent = `registry · ${label}`;
-    meterA?.render();
+    for (const { meter } of Object.values(activePaneMap)) meter?.render();
     showRegistryStatus(`Loaded ${label}`);
   } catch (err) {
     showRegistryStatus(err.message, true);

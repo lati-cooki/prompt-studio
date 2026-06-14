@@ -4,6 +4,7 @@ import io
 import sqlite3
 import sys
 import os
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import server
@@ -122,6 +123,39 @@ class TestSlugValidation(unittest.TestCase):
 
     def test_rejects_empty(self):
         self.assertFalse(server.is_safe_slug(""))
+
+
+class FakeResp:
+    def __init__(self, body, status=200):
+        self._body = body
+        self.status = status
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+class TestThreadsProxy(unittest.TestCase):
+    @patch("server.urllib.request.urlopen")
+    def test_threads_list_proxied(self, mock_open):
+        mock_open.return_value = FakeResp(b'[{"slug":"founding","title":"X"}]', 200)
+        h = MockHandler()
+        h.handle_get_threads()
+        self.assertEqual(h._last_status, 200)
+        self.assertIn(b'founding', h._body_written)
+
+    @patch("server.urllib.request.urlopen",
+           side_effect=server.urllib.error.URLError("connection refused"))
+    def test_threadhub_unreachable_returns_502(self, mock_open):
+        h = MockHandler()
+        h.handle_get_threads()
+        self.assertEqual(h._last_status, 502)
+        self.assertIn(b'threadhub_unreachable', h._body_written)
 
 
 if __name__ == "__main__":

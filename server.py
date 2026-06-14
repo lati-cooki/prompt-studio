@@ -3,6 +3,8 @@ import mimetypes
 import socketserver
 import json
 import sqlite3
+import urllib.request
+import urllib.error
 
 DB_PATH = 'prompt_studio.db'
 PORT = 8000
@@ -42,6 +44,26 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(json_string.encode('utf-8'))
 
+    def proxy_threadhub_get(self, th_path):
+        url = f"http://localhost:{THREADHUB_PORT}{th_path}"
+        try:
+            with urllib.request.urlopen(url, timeout=10) as resp:
+                body = resp.read()
+                status = resp.status
+        except urllib.error.HTTPError as e:
+            body = e.read()
+            status = e.code
+        except urllib.error.URLError:
+            self.send_json(
+                {"error": "ThreadHub is not reachable", "code": "threadhub_unreachable"},
+                status=502,
+            )
+            return
+        self.send_raw_json(body.decode('utf-8'), status=status)
+
+    def handle_get_threads(self):
+        self.proxy_threadhub_get("/threads")
+
     def do_GET(self):
         if self.path == '/api/sessions':
             self.handle_get_sessions()
@@ -55,6 +77,8 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_error(400)
                 return
             self.serve_file('registry/' + rel)
+        elif self.path == '/api/threads':
+            self.handle_get_threads()
         elif self.path in ('/', '/sandbox', '/sandbox/'):
             self.serve_file('sandbox/index.html', 'text/html')
         elif self.path in ('/registry', '/registry/'):

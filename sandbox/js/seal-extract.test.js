@@ -93,6 +93,7 @@ test('runExtraction: lmstudio non-streaming returns content', async () => {
   const fakeFetch = async (url, opts) => {
     const body = JSON.parse(opts.body);
     assert.strictEqual(body.stream, false);
+    assert.ok(body.max_tokens > 0, 'expected max_tokens in request');
     return { ok: true, json: async () => ({ choices: [{ message: { content: '{"question":"Q"}' } }] }) };
   };
   const out = await runExtraction({ id: 'g', provider: 'lmstudio', endpoint: 'http://x/v1/chat/completions' },

@@ -1,5 +1,7 @@
 import { parseSSEBuffer, extractSSEDelta } from './stream.js';
 
+const EXTRACTION_MAX_TOKENS = 4096;
+
 export const EXTRACTION_PROMPT = `You read a decision-making conversation and extract its accountable structure.
 Output ONLY a JSON object (no prose, no markdown fences) with these keys:
 - "question": the decision question (string)
@@ -91,7 +93,7 @@ export async function runExtraction(model, messages, fetchImpl) {
     const res = await doFetch(model.endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: model.id, messages, stream: false }),
+      body: JSON.stringify({ model: model.id, messages, stream: false, max_tokens: EXTRACTION_MAX_TOKENS }),
     });
     if (!res.ok) throw new Error('model error ' + res.status);
     const data = await res.json();
@@ -101,7 +103,7 @@ export async function runExtraction(model, messages, fetchImpl) {
   const res = await doFetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ provider: model ? model.provider : 'anthropic', model: model ? model.id : '', messages }),
+    body: JSON.stringify({ provider: model ? model.provider : 'anthropic', model: model ? model.id : '', messages, max_tokens: EXTRACTION_MAX_TOKENS }),
   });
   if (!res.ok || !res.body) throw new Error('model error ' + (res.status || 'no body'));
   const reader = res.body.getReader();

@@ -782,6 +782,7 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
       <span class="registry-status" id="registry-status" hidden></span>
       <a class="ghost-btn" href="/registry">Registry</a>
       <a class="ghost-btn" href="/threads">Threads</a>
+      <button type="button" class="ghost-btn" id="seal-open-btn">Seal as decision</button>
       <button class="ghost-btn" id="export-btn">Export .md</button>
       <button class="stop-btn" id="stop-both" hidden>⏹ Stop both</button>
     </div>
@@ -825,5 +826,118 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
 <div id="registry-panel-mount"></div>
 
 <script type="module" src="js/app.js"></script>
+<div id="seal-modal" style="display:none;position:fixed;inset:0;background:rgba(12,15,20,.45);z-index:1000;align-items:flex-start;justify-content:center;overflow:auto">
+  <div style="background:#f6f3ec;max-width:560px;width:92%;margin:48px 0;padding:24px;border-radius:6px;font-size:13px">
+    <h3 style="margin:0 0 12px">Seal as decision</h3>
+    <div id="seal-fields">
+      <label class="seal-l">Title</label>
+      <input id="seal-title" class="seal-i" type="text">
+      <label class="seal-l">Question</label>
+      <input id="seal-question" class="seal-i" type="text" placeholder="What was being decided?">
+      <label class="seal-l">Decision</label>
+      <input id="seal-decision" class="seal-i" type="text" placeholder="The yes / statement">
+      <label class="seal-l">Evidence <a id="seal-add-ev" href="javascript:void(0)">+ add</a></label>
+      <div id="seal-evidence"></div>
+      <label class="seal-l">Surviving objection <a id="seal-add-obj" href="javascript:void(0)">+ add</a></label>
+      <div id="seal-objections"></div>
+      <label class="seal-l">Decided by</label>
+      <input id="seal-decidedby" class="seal-i" type="text" value="Troy" style="max-width:220px">
+    </div>
+    <div id="seal-msg" style="color:#a83830;min-height:18px;margin-top:8px"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
+      <button type="button" class="ghost-btn" id="seal-cancel">Cancel</button>
+      <button type="button" class="ghost-btn" id="seal-submit" style="background:#0c0f14;color:#fff">Seal →</button>
+    </div>
+  </div>
+</div>
+<style>
+  .seal-l{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#5c636b;margin:10px 0 3px}
+  .seal-i{width:100%;padding:6px 8px;border:1px solid rgba(12,15,20,.2);border-radius:4px;font:inherit;background:#fff}
+  .seal-row{display:flex;gap:6px;margin-bottom:4px}
+</style>
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const modal = $("seal-modal");
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  function addEvidence() {
+    const row = document.createElement("div");
+    row.className = "seal-row";
+    row.innerHTML = '<input class="seal-i seal-ev-source" placeholder="source" style="flex:1">' +
+                    '<input class="seal-i seal-ev-finding" placeholder="finding" style="flex:2">';
+    $("seal-evidence").appendChild(row);
+  }
+  function addObjection() {
+    const row = document.createElement("div");
+    row.className = "seal-row";
+    row.innerHTML = '<input class="seal-i seal-obj-text" placeholder="what was not resolved" style="flex:1">';
+    $("seal-objections").appendChild(row);
+  }
+
+  function openModal() {
+    $("seal-evidence").innerHTML = "";
+    $("seal-objections").innerHTML = "";
+    addEvidence();
+    $("seal-msg").textContent = "";
+    $("seal-msg").style.color = "#a83830";
+    const sess = document.getElementById("topbar-session");
+    $("seal-title").value = sess ? sess.textContent.trim() : "";
+    modal.style.display = "flex";
+  }
+  function closeModal() { modal.style.display = "none"; }
+
+  async function submit() {
+    const evidence = Array.from(document.querySelectorAll("#seal-evidence .seal-row")).map(r => ({
+      source: r.querySelector(".seal-ev-source").value,
+      finding: r.querySelector(".seal-ev-finding").value,
+    }));
+    const objections = Array.from(document.querySelectorAll("#seal-objections .seal-obj-text"))
+      .map(i => ({ text: i.value })).filter(o => o.text.trim());
+    const payload = {
+      title: $("seal-title").value,
+      question: $("seal-question").value,
+      decision: $("seal-decision").value,
+      decidedBy: $("seal-decidedby").value,
+      evidence, objections,
+    };
+    $("seal-msg").style.color = "#5c636b";
+    $("seal-msg").textContent = "Sealing…";
+    let res, body;
+    try {
+      res = await fetch("/api/threads/seal", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      body = await res.json();
+    } catch (e) {
+      $("seal-msg").style.color = "#a83830";
+      $("seal-msg").textContent = "Network error.";
+      return;
+    }
+    if (res.ok) {
+      $("seal-msg").style.color = "#2e7048";
+      $("seal-msg").innerHTML = "✓ Sealed · " + esc(body.slug) + " · " +
+        esc((body.citationHash || "").slice(0, 18)) + "… · " +
+        '<a href="/threads">Open in Threads ↗</a>';
+    } else if (res.status === 400 && body.fields) {
+      $("seal-msg").style.color = "#a83830";
+      $("seal-msg").textContent = "Missing: " + Object.keys(body.fields).join(", ");
+    } else {
+      $("seal-msg").style.color = "#a83830";
+      $("seal-msg").textContent = "Could not seal: " + esc(body.error || res.status) +
+        (body.code === "threadhub_unreachable" ? " (start ThreadHub via the launcher)" : "");
+    }
+  }
+
+  $("seal-open-btn").addEventListener("click", openModal);
+  $("seal-cancel").addEventListener("click", closeModal);
+  $("seal-add-ev").addEventListener("click", addEvidence);
+  $("seal-add-obj").addEventListener("click", addObjection);
+  $("seal-submit").addEventListener("click", submit);
+  modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
+})();
+</script>
 </body>
 </html>

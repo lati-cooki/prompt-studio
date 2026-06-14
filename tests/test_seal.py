@@ -123,6 +123,11 @@ class TestAuthorClistaLog(unittest.TestCase):
         with self.assertRaises(seal.SealError):
             seal.author_clista_log(self._data(), "/tmp/x")
 
+    @patch("seal.subprocess.run", side_effect=FileNotFoundError("node"))
+    def test_node_missing_raises_sealerror(self, run):
+        with self.assertRaises(seal.SealError):
+            seal.author_clista_log(self._data(), "/tmp/x")
+
 
 class _Resp:
     def __init__(self, body):
@@ -169,6 +174,19 @@ class TestThreadHubWrite(unittest.TestCase):
         self.assertEqual(ctx.exception.status, 502)
         self.assertEqual(ctx.exception.extra.get("code"), "threadhub_unreachable")
 
+
+    @patch("seal.urllib.request.urlopen")
+    def test_malformed_event_line_raises_with_partial_slug(self, urlopen):
+        urlopen.return_value = _Resp({"slug": "ship"})  # POST /threads succeeds
+        events = os.path.join(os.path.dirname(__file__), "_seal_bad.ndjson")
+        with open(events, "w") as f:
+            f.write("{not json\n")
+        try:
+            with self.assertRaises(seal.SealError) as ctx:
+                seal.write_to_threadhub(events, "t", "q", "id_author")
+        finally:
+            os.remove(events)
+        self.assertEqual(ctx.exception.extra.get("partialSlug"), "ship")
 
     @patch("seal.urllib.request.urlopen")
     def test_non_json_200_raises_sealerror(self, urlopen):

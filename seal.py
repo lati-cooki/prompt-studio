@@ -37,8 +37,12 @@ def _parse_json(stdout, ctx):
 
 
 def _clista(args, cwd):
-    proc = subprocess.run(["node", CLISTA_CLI] + args, cwd=cwd,
-                          capture_output=True, text=True)
+    try:
+        proc = subprocess.run(["node", CLISTA_CLI] + args, cwd=cwd,
+                              capture_output=True, text=True)
+    except FileNotFoundError:
+        raise SealError("node/clista CLI not found — check CLISTA_CLI",
+                        status=500, extra={"code": "clista_unavailable"})
     if proc.returncode != 0:
         detail = proc.stderr.strip() or proc.stdout.strip()
         raise SealError(f"clista {' '.join(args[:2])} failed: {detail}")
@@ -48,8 +52,12 @@ def _clista(args, cwd):
 def _clista_validate(cwd):
     # validate exits 1 when invalid but still prints {valid, errors} JSON, so do NOT
     # gate on returncode; only a non-JSON stdout (a real crash) is an error.
-    proc = subprocess.run(["node", CLISTA_CLI, "validate"], cwd=cwd,
-                          capture_output=True, text=True)
+    try:
+        proc = subprocess.run(["node", CLISTA_CLI, "validate"], cwd=cwd,
+                              capture_output=True, text=True)
+    except FileNotFoundError:
+        raise SealError("node/clista CLI not found — check CLISTA_CLI",
+                        status=500, extra={"code": "clista_unavailable"})
     return _parse_json(proc.stdout, "validate")
 
 
@@ -129,9 +137,13 @@ def write_to_threadhub(events_path, title, question, author_id):
                 line = line.strip()
                 if not line:
                     continue
+                try:
+                    payload = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    raise SealError("authored ClisTa log contains a malformed line",
+                                    status=500)
                 _th("POST", f"/t/{slug}/records",
-                    {"author": author_id, "kind": "clista.event",
-                     "payload": json.loads(line)})
+                    {"author": author_id, "kind": "clista.event", "payload": payload})
     except SealError as e:
         e.extra["partialSlug"] = slug
         raise

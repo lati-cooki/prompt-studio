@@ -2,8 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import { VIEWS, resolveView, homeState } from './view.js';
 
-test('VIEWS lists the four views', () => {
-  assert.deepStrictEqual(VIEWS, ['home', 'deliberate', 'decisions', 'registry']);
+test('VIEWS lists the five views', () => {
+  assert.deepStrictEqual(VIEWS, ['home', 'deliberate', 'decisions', 'registry', 'sessions']);
 });
 
 test('resolveView: known ids pass through', () => {
@@ -13,6 +13,11 @@ test('resolveView: known ids pass through', () => {
 test('resolveView: leading # and case tolerated', () => {
   assert.strictEqual(resolveView('#Decisions'), 'decisions');
   assert.strictEqual(resolveView('  REGISTRY '), 'registry');
+});
+
+test('resolveView: sessions resolves', () => {
+  assert.strictEqual(resolveView('sessions'), 'sessions');
+  assert.strictEqual(resolveView('#Sessions'), 'sessions');
 });
 
 test('resolveView: unknown/empty falls back to home', () => {

@@ -1,4 +1,4 @@
-export const VIEWS = ['home', 'deliberate', 'decisions', 'registry'];
+export const VIEWS = ['home', 'deliberate', 'decisions', 'registry', 'sessions'];
 
 export function resolveView(raw) {
   const id = String(raw == null ? '' : raw).trim().replace(/^#/, '').toLowerCase();

@@ -69,6 +69,7 @@ export function parseExtraction(text) {
 
 export function buildExtractionMessages(transcript) {
   const rendered = (Array.isArray(transcript) ? transcript : [])
+    .filter((m) => !(m && m.role === 'system'))
     .map((m) => `${m && m.role ? m.role : 'user'}: ${m && typeof m.content === 'string' ? m.content : ''}`)
     .join('\n\n');
   return [

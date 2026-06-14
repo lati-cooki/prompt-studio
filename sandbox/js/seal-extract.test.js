@@ -76,6 +76,15 @@ test('parseExtraction: skips a balanced {...} in prose before the real object', 
   assert.strictEqual(out.decision, 'D');
 });
 
+test('buildExtractionMessages: excludes system messages from the rendered transcript', () => {
+  const msgs = buildExtractionMessages([
+    { role: 'system', content: 'You are the Rational Partner persona.' },
+    { role: 'user', content: 'Should we ship?' },
+  ]);
+  assert.ok(!msgs[1].content.includes('Rational Partner persona'), 'system msg should be excluded');
+  assert.ok(msgs[1].content.includes('Should we ship?'));
+});
+
 test('paneContext: empty map → null model, empty messages', () => {
   assert.deepStrictEqual(paneContext({}, {}), { model: null, messages: [] });
 });

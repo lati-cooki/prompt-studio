@@ -33,8 +33,9 @@ citation hash.
 - **Identity: custodial.** ThreadHub holds the key; Studio declares a `Troy` identity once and POSTs
   unsigned payloads / ingests; the server signs. This is ThreadHub's documented v1 human-writer path
   ("human writers never touch key material"). Non-custodial is deferred.
-- **Build approach: ClisTa CLI orchestration → ThreadHub ingest.** ClisTa authors and validates the
-  log (it owns the schema); we never hand-craft ClisTa JSON or modify ClisTa/ThreadHub.
+- **Build approach: ClisTa CLI authoring → custodial HTTP writes to ThreadHub.** ClisTa authors and
+  validates the log (it owns the schema); ThreadHub stores it via its HTTP custodial write API. We
+  never hand-craft ClisTa JSON or modify ClisTa/ThreadHub.
 - **No prefill.** v1 form is fully manual (no auto-extraction from the session); that is Phase 3.
 - **Decision model: decision-as-claim (NOT a formal `DecisionMerged`).** Verified against the live
   `clista` CLI: a formal authorized `decision merge` requires the decider to hold `decision_owner`
@@ -52,8 +53,11 @@ citation hash.
   to the `clista` and `threadhub` (node) CLIs.
 - **`trusted: false` holds.** A sealed decision being well-formed is not a claim that it is correct.
 - **No new runtime dependencies** in Studio (stdlib + subprocess to node, consistent with Phase 1).
-- **Atomicity:** author into a fresh temp events file and `validate` it BEFORE any ThreadHub write.
-  `threadhub ingest` is the single ThreadHub mutation, so a failure upstream leaves no partial thread.
+- **Atomicity:** author + `clista validate` the full log BEFORE any ThreadHub write, so writes only
+  begin once the decision is known-valid. ThreadHub records are append-only, so if a record `POST`
+  fails mid-sequence the thread can be left partial (rare, localhost); surface a clear error and let
+  the user re-seal (which creates a fresh thread). A partial thread still chain-verifies — it is just
+  missing tail events — so it is detectable, not silently corrupt.
 - **Isolation:** the orchestration lives in a dedicated, unit-testable `seal.py` module; `server.py`
   stays a thin route.
 
@@ -64,11 +68,11 @@ Sandbox topbar "Seal as decision" button
   └─ opens modal form (5 fields)
        └─ POST /api/threads/seal  { title, question, decision, evidence[], objections[], decidedBy }
             └─ server.py  → seal.py.seal_decision(payload)
-                 1. ensure custodial identity (declare "Troy" once, reuse id)
-                 2. author ClisTa log into a fresh temp events file (CLI sequence)
-                 3. clista validate <tmp>          (gate — abort on failure, nothing written)
-                 4. threadhub ingest --events <tmp> --author <id> --title <title>
-                 5. return { slug, citationHash }
+                 1. ensure custodial ThreadHub identity (find-or-create, cache the id)
+                 2. author ClisTa log in a fresh temp dir (CLI sequence) → list of events
+                 3. clista validate          (gate — abort BEFORE any write on failure)
+                 4. POST /threads, then POST /t/<slug>/records per event (custodial, server signs)
+                 5. GET /t/<slug>/verify → head; return { slug, citationHash: head }
        └─ result UI: "✓ Sealed · <slug> · sha256:… · Open in Threads ↗"
 ```
 
@@ -91,8 +95,9 @@ A dedicated module with a primary entry `seal_decision(payload) -> {slug, citati
 helpers. Responsibilities:
 - **Validate payload** (raises a typed error → 400): require non-empty `question`, `decision`,
   `decidedBy`, and `evidence` with ≥1 item each having `source` + `finding`. `objections` optional.
-- **Ensure identity:** look up / create the custodial ThreadHub identity for the author (declare once,
-  cache the id; idempotent).
+- **Ensure identity:** find-or-create the custodial ThreadHub identity once and cache its id in a
+  local file (e.g. `.seal_author_id`, gitignored) so repeat seals reuse one author. Create via
+  `POST /identities {display_name: "Prompt Studio", kind: "agent"}` (returns `id`).
 - **Author the ClisTa log** in a fresh temp working directory (ClisTa authoring appends to
   `<cwd>/.clista/events.ndjson`; each command prints the created object as JSON to stdout for id
   capture). The verified sequence (decision-as-claim):
@@ -103,9 +108,15 @@ helpers. Responsibilities:
   5. for each objection: `clista objection raise --thread <tid> --participant <pid> --target <claimId> --text <objection>`.
   All commands run with `cwd` = the temp dir so they share one `.clista/events.ndjson`.
 - **Validate:** `clista validate` (cwd = temp dir); parse stdout JSON `valid`; abort (no ThreadHub
-  write) when `valid` is false, surfacing `errors`.
-- **Ingest:** `threadhub ingest --events <tmp>/.clista/events.ndjson --author <id> --title <title> --slug <slug>`;
-  parse the returned `{thread, slug, records, head}` (head is the citation hash).
+  write) when `valid` is false, surfacing `errors`. **This is the atomicity gate — no HTTP write
+  begins until the full log is known valid.**
+- **Write to ThreadHub over HTTP** (custodial; goes through the running sidecar, so no second process
+  touches ThreadHub's SQLite and no db path is assumed):
+  1. `POST /threads {title, question, author}` → capture `slug`.
+  2. read the validated `.clista/events.ndjson`; for each event line `POST /t/<slug>/records
+     {author, kind: "clista.event", payload: <event>}`.
+  3. `GET /t/<slug>/verify` → `head` (citation hash).
+  All to `http://localhost:8110` (the `THREADHUB_PORT` from Phase 1).
 - **Return** `{slug, citationHash}` (citationHash = `head`). Clean up the temp dir.
 
 ### 3. `server.py` route
@@ -118,7 +129,7 @@ orchestration failure → `500 {error}`.
 
 | Form field | ClisTa authoring |
 | --- | --- |
-| Title | thread title (also passed to `threadhub ingest --title`) |
+| Title | thread title (`POST /threads {title}`) |
 | Question | `thread create --question` |
 | Evidence[] (source, finding) | `evidence commit --source --finding` (one per item; collect ids) |
 | Decision | central `claim create --text <decision> --evidence <ids>` (decision-as-claim; no `decision merge`) |
@@ -128,10 +139,12 @@ orchestration failure → `500 {error}`.
 ## Error handling
 
 - Missing/empty required field → `400` with a `fields` map; the form highlights offending fields.
-- ClisTa authoring or `validate` failure → `500 {error}`; **no ThreadHub write occurs** (temp-then-ingest).
-- ThreadHub unreachable / ingest connection failure → `502 {code: "threadhub_unreachable"}`; form offers retry.
-- ThreadHub rate-limited → pass through `429`.
-- Temp file always cleaned up (success or failure).
+- ClisTa authoring or `validate` failure → `500 {error}`; **no ThreadHub write occurs** (validate-first gate).
+- ThreadHub unreachable (connection refused on any seal call) → `502 {code: "threadhub_unreachable"}`; form offers retry.
+- ThreadHub rate-limited (`429`) → pass through `429`.
+- Mid-sequence record-POST failure after the thread is created → `502 {error, partialSlug}`; the form
+  reports the thread may be incomplete and offers re-seal.
+- Temp dir always cleaned up (success or failure).
 
 ## Testing
 
@@ -162,9 +175,11 @@ All previously-open CLI mechanics were verified against the live tools during pl
   evidence ids on `claim create --evidence` are comma-separated.
 - `clista validate` (in the temp dir) returns `{valid, errors}`; the decision-as-claim sequence
   validates `valid: true`.
-- `threadhub ingest` returns `{thread, slug, records, head}`; `head` is the citation hash.
+- ThreadHub HTTP custodial writes verified: `POST /identities` → `{id}`; `POST /threads` → `{slug,…}`;
+  `POST /t/<slug>/records {author, kind:"clista.event", payload}` → `{record_hash, seq}`;
+  `GET /t/<slug>/verify` → `{valid, records, head}` (`head` = citation hash).
 - Custodial author: a ThreadHub identity (`threadhub identity create --name <…> --kind agent`) is the
-  `--author` for `ingest`; the in-log ClisTa participant (`par_<name>`) is independent of it.
+  `author` for the record POSTs; the in-log ClisTa participant (`par_<name>`) is independent of it.
 
 Remaining for the plan to nail in code: shell-escaping of free-text fields passed to the CLIs, and the
 exact temp-dir lifecycle/cleanup.

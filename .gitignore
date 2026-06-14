@@ -5,3 +5,4 @@ test_api.py
 prompt_studio.db
 .devswarm-temp/
 .env
+.superpowers/

@@ -1,3 +1,5 @@
+import { parseSSEBuffer, extractSSEDelta } from './stream.js';
+
 export const EXTRACTION_PROMPT = `You read a decision-making conversation and extract its accountable structure.
 Output ONLY a JSON object (no prose, no markdown fences) with these keys:
 - "question": the decision question (string)
@@ -71,4 +73,54 @@ export function buildExtractionMessages(transcript) {
     { role: 'system', content: EXTRACTION_PROMPT },
     { role: 'user', content: `Conversation:\n\n${rendered}\n\nReturn the JSON object.` },
   ];
+}
+
+export function paneContext(activePaneMap, models) {
+  const entries = Object.entries(activePaneMap || {});
+  if (!entries.length) return { model: null, messages: [] };
+  const [modelKey, entry] = entries[0];
+  const messages = entry && entry.state && Array.isArray(entry.state.messages)
+    ? [...entry.state.messages]
+    : [];
+  return { model: (models || {})[modelKey] || null, messages };
+}
+
+export async function runExtraction(model, messages, fetchImpl) {
+  const doFetch = fetchImpl || fetch;
+  if (model && model.provider === 'lmstudio') {
+    const res = await doFetch(model.endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: model.id, messages, stream: false }),
+    });
+    if (!res.ok) throw new Error('model error ' + res.status);
+    const data = await res.json();
+    const msg = (data.choices && data.choices[0] && data.choices[0].message) || {};
+    return msg.content && msg.content.trim() ? msg.content : (msg.reasoning || '');
+  }
+  const res = await doFetch('/api/chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider: model ? model.provider : 'anthropic', model: model ? model.id : '', messages }),
+  });
+  if (!res.ok || !res.body) throw new Error('model error ' + (res.status || 'no body'));
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '', out = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const { events, remainder } = parseSSEBuffer(buffer);
+    buffer = remainder;
+    for (const ev of events) {
+      const { content } = extractSSEDelta(ev);
+      if (content) out += content;
+    }
+  }
+  return out;
+}
+
+if (typeof window !== 'undefined') {
+  window.SealExtract = { EXTRACTION_PROMPT, buildExtractionMessages, parseExtraction, paneContext, runExtraction };
 }

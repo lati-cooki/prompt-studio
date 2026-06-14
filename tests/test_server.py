@@ -231,6 +231,19 @@ class TestSealRoute(unittest.TestCase):
         self.assertEqual(h._last_status, 400)
         self.assertIn(b"question", h._body_written)
 
+    @patch("seal.seal_decision",
+           side_effect=__import__("seal").SealError("ThreadHub is not reachable",
+                                                    status=502,
+                                                    extra={"code": "threadhub_unreachable"}))
+    def test_seal_error_maps_status_and_extra(self, mock_seal):
+        h = MockHandler()
+        h.path = "/api/threads/seal"
+        h._set_body(json.dumps({"question": "q", "decision": "d", "decidedBy": "Troy",
+                                "evidence": [{"source": "s", "finding": "f"}]}).encode())
+        h.do_POST()
+        self.assertEqual(h._last_status, 502)
+        self.assertIn(b"threadhub_unreachable", h._body_written)
+
 
 class TestThreadsRoute(unittest.TestCase):
     def test_threads_route_serves_widget(self):

@@ -64,6 +64,18 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
     def handle_get_threads(self):
         self.proxy_threadhub_get("/threads")
 
+    def handle_get_thread(self, slug):
+        if not is_safe_slug(slug):
+            self.send_error(400, "Invalid slug")
+            return
+        self.proxy_threadhub_get(f"/t/{slug}.json")
+
+    def handle_get_thread_verify(self, slug):
+        if not is_safe_slug(slug):
+            self.send_error(400, "Invalid slug")
+            return
+        self.proxy_threadhub_get(f"/t/{slug}/verify")
+
     def do_GET(self):
         if self.path == '/api/sessions':
             self.handle_get_sessions()
@@ -79,6 +91,12 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             self.serve_file('registry/' + rel)
         elif self.path == '/api/threads':
             self.handle_get_threads()
+        elif self.path.startswith('/api/threads/'):
+            rest = self.path[len('/api/threads/'):]
+            if rest.endswith('/verify'):
+                self.handle_get_thread_verify(rest[:-len('/verify')])
+            else:
+                self.handle_get_thread(rest)
         elif self.path in ('/', '/sandbox', '/sandbox/'):
             self.serve_file('sandbox/index.html', 'text/html')
         elif self.path in ('/registry', '/registry/'):

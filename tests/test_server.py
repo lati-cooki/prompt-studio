@@ -157,6 +157,32 @@ class TestThreadsProxy(unittest.TestCase):
         self.assertEqual(h._last_status, 502)
         self.assertIn(b'threadhub_unreachable', h._body_written)
 
+    @patch("server.urllib.request.urlopen")
+    def test_thread_detail_proxied(self, mock_open):
+        mock_open.return_value = FakeResp(b'[{"seq":0,"kind":"genesis"}]', 200)
+        h = MockHandler()
+        h.handle_get_thread("founding")
+        self.assertEqual(h._last_status, 200)
+        self.assertIn(b'genesis', h._body_written)
+
+    @patch("server.urllib.request.urlopen")
+    def test_thread_verify_proxied(self, mock_open):
+        mock_open.return_value = FakeResp(b'{"valid":true,"records":14}', 200)
+        h = MockHandler()
+        h.handle_get_thread_verify("founding")
+        self.assertEqual(h._last_status, 200)
+        self.assertIn(b'"valid":true', h._body_written)
+
+    def test_thread_detail_rejects_bad_slug(self):
+        h = MockHandler()
+        h.handle_get_thread("../etc/passwd")
+        self.assertEqual(h._last_status, 400)
+
+    def test_thread_verify_rejects_bad_slug(self):
+        h = MockHandler()
+        h.handle_get_thread_verify("a/b")
+        self.assertEqual(h._last_status, 400)
+
 
 if __name__ == "__main__":
     unittest.main()

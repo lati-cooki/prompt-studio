@@ -828,7 +828,10 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
 <script type="module" src="js/app.js"></script>
 <div id="seal-modal" style="display:none;position:fixed;inset:0;background:rgba(12,15,20,.45);z-index:1000;align-items:flex-start;justify-content:center;overflow:auto">
   <div style="background:#f6f3ec;max-width:560px;width:92%;margin:48px 0;padding:24px;border-radius:6px;font-size:13px">
-    <h3 style="margin:0 0 12px">Seal as decision</h3>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin:0 0 12px">
+      <h3 style="margin:0">Seal as decision</h3>
+      <button type="button" class="ghost-btn" id="seal-suggest-btn" style="font-size:11px">✨ Suggest from conversation</button>
+    </div>
     <div id="seal-fields">
       <label class="seal-l">Title</label>
       <input id="seal-title" class="seal-i" type="text">
@@ -940,11 +943,66 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
     }
   }
 
+  async function suggest() {
+    const SE = window.SealExtract;
+    if (!SE || !window.sealActivePane) {
+      $("seal-msg").style.color = "#a83830";
+      $("seal-msg").textContent = "Suggest unavailable.";
+      return;
+    }
+    const ctx = window.sealActivePane();
+    if (!ctx.messages || !ctx.messages.length) {
+      $("seal-msg").style.color = "#a83830";
+      $("seal-msg").textContent = "Start a conversation first — nothing to read.";
+      return;
+    }
+    const btn = $("seal-suggest-btn");
+    const label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = "⋯ Reading conversation…";
+    $("seal-msg").style.color = "#5c636b";
+    $("seal-msg").textContent = "";
+    try {
+      const text = await SE.runExtraction(ctx.model, SE.buildExtractionMessages(ctx.messages));
+      const draft = SE.parseExtraction(text);
+      $("seal-question").value = draft.question;
+      $("seal-decision").value = draft.decision;
+      $("seal-evidence").innerHTML = "";
+      if (draft.evidence.length) {
+        draft.evidence.forEach((e) => {
+          addEvidence();
+          const row = $("seal-evidence").lastElementChild;
+          row.querySelector(".seal-ev-source").value = e.source;
+          row.querySelector(".seal-ev-finding").value = e.finding;
+        });
+      } else {
+        addEvidence();
+      }
+      $("seal-objections").innerHTML = "";
+      draft.objections.forEach((o) => {
+        addObjection();
+        $("seal-objections").lastElementChild.querySelector(".seal-obj-text").value = o.text;
+      });
+      $("seal-msg").style.color = "#a87a00";
+      $("seal-msg").textContent = "✨ Drafted from conversation — review & edit before sealing.";
+    } catch (e) {
+      $("seal-msg").style.color = "#a83830";
+      $("seal-msg").textContent =
+        /model error|fetch|Failed/.test(String(e && e.message))
+          ? "Model unreachable — is it running?"
+          : "Couldn't draft from this conversation. Fill manually or try again.";
+    } finally {
+      btn.disabled = false;
+      btn.textContent = label;
+    }
+  }
+
   $("seal-open-btn").addEventListener("click", openModal);
   $("seal-cancel").addEventListener("click", closeModal);
   $("seal-add-ev").addEventListener("click", addEvidence);
   $("seal-add-obj").addEventListener("click", addObjection);
   $("seal-submit").addEventListener("click", submit);
+  $("seal-suggest-btn").addEventListener("click", suggest);
   modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(); });
 })();
 </script>

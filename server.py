@@ -89,10 +89,10 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_error(400)
                 return
             self.serve_file('registry/' + rel)
-        elif self.path == '/api/threads':
+        elif self.path == '/api/threads' or self.path.startswith('/api/threads?'):
             self.handle_get_threads()
         elif self.path.startswith('/api/threads/'):
-            rest = self.path[len('/api/threads/'):]
+            rest = self.path[len('/api/threads/'):].split('?', 1)[0]
             if rest.endswith('/verify'):
                 self.handle_get_thread_verify(rest[:-len('/verify')])
             else:

@@ -183,6 +183,16 @@ class TestThreadsProxy(unittest.TestCase):
         h.handle_get_thread_verify("a/b")
         self.assertEqual(h._last_status, 400)
 
+    @patch("server.urllib.request.urlopen")
+    def test_thread_detail_strips_query_string(self, mock_open):
+        mock_open.return_value = FakeResp(b'[{"seq":0}]', 200)
+        h = MockHandler()
+        h.path = '/api/threads/founding?foo=1'
+        h.do_GET()
+        self.assertEqual(h._last_status, 200)
+        # upstream URL must be well-formed, with the query stripped
+        self.assertEqual(mock_open.call_args[0][0], "http://localhost:8110/t/founding.json")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -6,3 +6,4 @@ prompt_studio.db
 .devswarm-temp/
 .env
 .superpowers/
+.seal_author_id

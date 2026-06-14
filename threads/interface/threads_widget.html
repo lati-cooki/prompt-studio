@@ -111,7 +111,7 @@ async function showDetail(slug) {
     return;
   }
   const badge = verify.valid
-    ? `<span class="badge ok">✓ chain verified · ${verify.records} records</span>`
+    ? `<span class="badge ok">✓ chain verified · ${esc(verify.records)} records</span>`
     : `<span class="badge bad">✗ chain broken · ${esc((verify.problems || []).join('; '))}</span>`;
   const rows = chain.map(r => `
     <div class="rec">

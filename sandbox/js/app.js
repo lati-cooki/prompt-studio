@@ -257,6 +257,8 @@ const $registryStatus  = document.getElementById("registry-status");
 const $composerLabel = document.getElementById("composer-label");
 const $sendHint      = document.getElementById("send-hint");
 const $railModeTag   = document.getElementById("rail-mode-tag");
+const $sessionsRail  = document.getElementById("sessions-rail");
+const $topbar        = document.querySelector(".topbar");
 
 // ── View router ─────────────────────────────────────────
 function showView(raw) {
@@ -265,6 +267,9 @@ function showView(raw) {
   const isRegistry = view === 'registry';
   const isDecisions = view === 'decisions';
   const isHome = view === 'home';
+  // Deliberate-only chrome
+  if ($sessionsRail) $sessionsRail.style.display = isDeliberate ? "" : "none";
+  if ($topbar) $topbar.style.display = isDeliberate ? "" : "none";
   // Deliberate (sandbox) surfaces
   $paneContainer.style.display      = isDeliberate ? "" : "none";
   $composer.style.display           = isDeliberate ? "" : "none";

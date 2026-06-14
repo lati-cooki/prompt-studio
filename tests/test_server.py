@@ -110,5 +110,19 @@ class TestNotFound(unittest.TestCase):
         self.assertEqual(h._last_status, 404)
 
 
+class TestSlugValidation(unittest.TestCase):
+    def test_accepts_plain_slug(self):
+        self.assertTrue(server.is_safe_slug("founding"))
+        self.assertTrue(server.is_safe_slug("workflow-audit-q2"))
+
+    def test_rejects_path_separators_and_traversal(self):
+        self.assertFalse(server.is_safe_slug("a/b"))
+        self.assertFalse(server.is_safe_slug(".."))
+        self.assertFalse(server.is_safe_slug("../etc/passwd"))
+
+    def test_rejects_empty(self):
+        self.assertFalse(server.is_safe_slug(""))
+
+
 if __name__ == "__main__":
     unittest.main()

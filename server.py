@@ -7,6 +7,12 @@ import sqlite3
 DB_PATH = 'prompt_studio.db'
 PORT = 8000
 MAX_BODY_BYTES = 10 * 1024 * 1024  # 10 MB
+THREADHUB_PORT = 8110
+
+
+def is_safe_slug(slug):
+    return bool(slug) and '/' not in slug and '..' not in slug
+
 
 class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
     def end_headers(self):

@@ -278,11 +278,8 @@ select {
     <div class="doc-nav"><a href="/">← Studio</a></div>
     <div class="doc-eyebrow">Prompt Studio · Registry · v0.1</div>
     <h1 class="doc-title">Prompt Registry</h1>
-    <div class="doc-meta">
-      <span>7 entries</span>
-      <span>2 tiers</span>
-      <span>1 eval batch</span>
-      <span>last updated 2026-05-04</span>
+    <div class="doc-meta" id="doc-meta">
+      <span id="meta-count">loading…</span>
     </div>
   </div>
 
@@ -392,39 +389,39 @@ async function loadRegistry() {
 function render() {
   let rows = data.filter(d => activeFilter === "all" || d.tier === activeFilter);
   rows.sort((a, b) => {
-    if (activeSort === "cost")   return (b.cost || 0) - (a.cost || 0);
-    if (activeSort === "tokens") return (b.tokens || 0) - (a.tokens || 0);
-    if (activeSort === "status") return a.status.localeCompare(b.status);
-    return a.id.localeCompare(b.id) || a.version.localeCompare(b.version);
+    if (activeSort === "cost")   return (b.costPerRunUsd || 0) - (a.costPerRunUsd || 0);
+    if (activeSort === "tokens") return (b.tokensPromptBody || 0) - (a.tokensPromptBody || 0);
+    if (activeSort === "status") return (a.status || "").localeCompare(b.status || "");
+    return (a.id || "").localeCompare(b.id || "") || (a.version || "").localeCompare(b.version || "");
   });
 
-  document.getElementById("rows").innerHTML = rows.map((d, i) => `
-    <div class="row" data-id="${d.id}-${d.version}">
+  document.getElementById("rows").innerHTML = rows.map(d => `
+    <div class="row" data-id="${esc(d.id)}-${esc(d.version)}">
       <div class="row-main">
         <span class="row-marker">→</span>
         <div class="row-id-block">
           <div class="row-id">
-            <span class="id">${d.id}</span>
-            <span class="ver">@${d.version}</span>
+            <span class="id">${esc(d.id)}</span>
+            <span class="ver">@${esc(d.version)}</span>
           </div>
-          <div class="row-use">${d.useCase}</div>
+          <div class="row-use">${esc(d.useCase)}</div>
         </div>
         <div class="badges">
-          <span class="badge b-tier-${d.tier}">${d.tier}</span>
-          <span class="badge b-${d.status}">${d.status}</span>
+          ${d.tier ? `<span class="badge b-tier-${esc(d.tier)}">${esc(d.tier)}</span>` : ""}
+          ${d.status ? `<span class="badge b-${esc(d.status)}">${esc(d.status)}</span>` : ""}
         </div>
         <div class="row-cost">
-          <div class="row-cost-amt">${d.costStr}</div>
-          <div class="row-cost-tok">${d.tokens ? d.tokens.toLocaleString() + " tok" : "—"}</div>
+          <div class="row-cost-amt">${esc(costStr(d.costPerRunUsd))}</div>
+          <div class="row-cost-tok">${d.tokensPromptBody ? Number(d.tokensPromptBody).toLocaleString() + " tok" : "—"}</div>
         </div>
       </div>
       <div class="detail">
         <div class="detail-inner">
           <dl class="kv">
-            <dt>Default model</dt><dd class="mono">${d.defaultModel}</dd>
-            <dt>Eval status</dt><dd>${d.evalStatus}</dd>
-            <dt>Notes</dt><dd>${d.note}</dd>
-            <dt>Composes</dt><dd>${d.composes.length ? d.composes.join(", ") : "none"}</dd>
+            <dt>Default model</dt><dd class="mono">${esc(d.defaultModel ?? "—")}</dd>
+            <dt>Eval status</dt><dd>${esc(d.evalStatus ?? "—")}</dd>
+            <dt>Notes</dt><dd>${esc(d.notes ?? "")}</dd>
+            <dt>Composes</dt><dd>${d.composes && d.composes.length ? d.composes.map(esc).join(", ") : "none"}</dd>
           </dl>
           <div class="actions">
             <button onclick="event.stopPropagation(); viewBody('${d.id}', '${d.version}', '${d.file || ""}')">View body</button>
@@ -439,6 +436,30 @@ function render() {
   document.querySelectorAll(".row").forEach(r => {
     r.addEventListener("click", () => r.classList.toggle("expanded"));
   });
+}
+
+function showBody(id, version) {
+  const entry = data.find(d => d.id === id && d.version === version);
+  if (!entry?.body) return;
+  const win = window.open("", "_blank");
+  win.document.write(`<pre style="font-family:monospace;white-space:pre-wrap;padding:1rem">${entry.body.replace(/&/g,"&amp;").replace(/</g,"&lt;")}</pre>`);
+  win.document.close();
+}
+
+async function loadData() {
+  try {
+    const res = await fetch(`${API_BASE}/prompts`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    data = await res.json();
+    document.getElementById("error-banner").style.display = "none";
+    updateStats();
+    render();
+  } catch (err) {
+    const banner = document.getElementById("error-banner");
+    banner.textContent = `Could not load prompts from API: ${err.message}`;
+    banner.style.display = "block";
+    document.getElementById("meta-count").textContent = "offline";
+  }
 }
 
 document.querySelectorAll(".filter-btn").forEach(b => {

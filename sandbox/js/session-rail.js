@@ -15,8 +15,9 @@ export function renderSessionList(slot, entries, { onClick, onDelete, activeId =
 
     const dots = document.createElement("span");
     dots.className   = "rail-session-dots";
-    dots.textContent = entry.panes
-      .map(p => p.messages.length > 1 ? "●" : "○")
+    const panesArr = Array.isArray(entry.panes) ? entry.panes : (entry.panes?.panes ?? []);
+    dots.textContent = panesArr
+      .map(p => (p.messages?.length ?? 0) > 1 ? "●" : "○")
       .join("");
 
     const name = document.createElement("span");

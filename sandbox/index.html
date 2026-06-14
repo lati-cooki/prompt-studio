@@ -120,7 +120,7 @@ body::after {
   letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink-4);
 }
 
-.rail-list { flex: 1; overflow-y: auto; padding-bottom: 4px; }
+.rail-list { flex: 1; min-height: 80px; overflow-y: auto; padding-bottom: 4px; }
 .rail-list::-webkit-scrollbar { width: 3px; }
 .rail-list::-webkit-scrollbar-track { background: transparent; }
 .rail-list::-webkit-scrollbar-thumb { background: var(--line); }
@@ -622,23 +622,103 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
   color: var(--ink-4); font-size: 10px;
   max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+
+/* ── Prompt picker (rail) ── */
+.rail-prompt-section { padding: 10px 12px; border-bottom: 1px solid var(--line-2); }
+.rail-section-label { font-family: var(--mono); font-size: 9.5px; color: var(--ink-4); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; }
+.rail-prompt-select { width: 100%; font-family: var(--sans); font-size: 11.5px; background: var(--paper); border: 1px solid var(--line); color: var(--ink); padding: 5px 8px; border-radius: 0; cursor: pointer; }
+.rail-prompt-badges { display: flex; gap: 5px; margin-top: 4px; flex-wrap: wrap; }
+.rail-prompt-badge { font-family: var(--mono); font-size: 9px; padding: 1px 5px; border-radius: 2px; }
+.rail-prompt-badge.version { color: var(--green); background: rgba(46,112,72,.08); border: 1px solid rgba(46,112,72,.2); }
+.rail-prompt-badge.eval { color: var(--amber); background: rgba(168,122,0,.08); border: 1px solid rgba(168,122,0,.2); }
+.rail-prompt-badge.validated { color: var(--green); background: rgba(46,112,72,.08); border: 1px solid rgba(46,112,72,.2); }
+
+/* ── Model checklist (rail) ── */
+.rail-model-section { padding: 10px 12px; border-bottom: 1px solid var(--line-2); max-height: 160px; overflow-y: auto; flex-shrink: 0; }
+.model-group-label { font-family: var(--mono); font-size: 9px; color: var(--ink-4); text-transform: uppercase; letter-spacing: 0.06em; margin: 6px 0 3px; }
+.model-row { display: flex; align-items: center; gap: 6px; padding: 3px 0; cursor: pointer; font-size: 11.5px; color: var(--ink-2); }
+.model-row:hover { color: var(--ink); }
+.model-cb { accent-color: var(--teal); flex-shrink: 0; }
+.model-name { flex: 1; font-family: var(--mono); font-size: 10.5px; }
+.model-tag { font-size: 9px; padding: 1px 4px; border-radius: 2px; font-family: var(--mono); }
+.model-tag.local     { color: var(--green);  background: rgba(46,112,72,.08); }
+.model-tag.lmstudio  { color: var(--teal);   background: rgba(42,100,100,.08); }
+.model-tag.frontier { color: var(--plum);   background: rgba(97,72,130,.08); }
+.model-tag.anthropic { color: var(--teal);  background: rgba(42,100,100,.08); }
+.model-tag.openai    { color: #10a37f;      background: rgba(16,163,127,.08); }
+.model-tag.xai       { color: var(--ink-3); background: rgba(12,15,20,.06); }
+.model-tag.google    { color: #4285f4;      background: rgba(66,133,244,.08); }
+
+/* ── Rail bottom actions ── */
+.rail-actions { padding: 10px 12px; border-top: 1px solid var(--line-2); display: flex; flex-direction: column; gap: 5px; }
+.rail-action-btn { width: 100%; font-family: var(--mono); font-size: 10px; background: transparent; border: 1px solid var(--line); color: var(--ink-3); padding: 6px 10px; cursor: pointer; letter-spacing: 0.02em; text-align: left; }
+.rail-action-btn:hover { color: var(--ink); border-color: rgba(12,15,20,.25); background: var(--paper); }
+.rail-action-btn.primary { color: var(--teal); border-color: rgba(42,100,100,.3); }
+.rail-action-btn.primary:hover { background: rgba(42,100,100,.05); }
+
+/* ── Registry panel (right) ── */
+.registry-panel { width: 220px; flex-shrink: 0; background: var(--paper-2); border-left: 1px solid var(--line); display: flex; flex-direction: column; padding: 14px 12px; gap: 7px; overflow-y: auto; }
+.rp-title { font-family: var(--mono); font-size: 9.5px; color: var(--ink-4); text-transform: uppercase; letter-spacing: 0.06em; }
+.rp-id { font-size: 13px; font-weight: 600; color: var(--ink); }
+.rp-meta { font-size: 11px; color: var(--ink-3); }
+.rp-divider { border: none; border-top: 1px solid var(--line-2); margin: 2px 0; }
+.rp-stats { display: flex; flex-direction: column; gap: 3px; }
+.rp-stat { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--ink-3); }
+.rp-stat span { color: var(--ink-2); font-family: var(--mono); }
+.rp-action { width: 100%; font-family: var(--mono); font-size: 10px; background: transparent; border: 1px solid var(--line); color: var(--ink-3); padding: 5px 8px; cursor: pointer; text-align: left; letter-spacing: 0.02em; }
+.rp-action:hover { color: var(--ink); }
+.rp-action.save-version { color: var(--teal); border-color: rgba(42,100,100,.3); }
+.rp-action.save-version:hover { background: rgba(42,100,100,.05); }
+.rp-action.promote { color: var(--green); border-color: rgba(46,112,72,.3); }
+.rp-action.promote:hover { background: rgba(46,112,72,.05); }
+.rp-action.open-reg { font-size: 9.5px; }
+.rp-action:disabled { opacity: 0.4; cursor: default; }
+.rp-sessions { display: flex; flex-direction: column; gap: 1px; }
+.rp-sessions-empty { font-size: 10.5px; color: var(--ink-4); font-style: italic; }
+.rp-session-row { display: flex; align-items: center; gap: 4px; padding: 4px 6px; border-radius: 3px; cursor: pointer; }
+.rp-session-row:hover { background: var(--paper-3); }
+.rp-session-name { flex: 1; font-size: 11px; color: var(--ink-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rp-session-age { font-family: var(--mono); font-size: 9px; color: var(--ink-4); flex-shrink: 0; }
+
+/* ── Registry iframe tab ── */
+.registry-frame { flex: 1; border: none; background: var(--paper); display: none; }
+
+/* ── Directive composer label ── */
+.composer-directive-hint { font-size: 10px; color: var(--ink-4); font-family: var(--mono); }
 </style>
 </head>
 <body>
 
-<!-- ── Sessions rail ─────────────────────────────── -->
+<!-- ── Left Rail ───────────────────────────────── -->
 <aside class="rail" id="sessions-rail">
+
   <div class="rail-header">
-    <div class="rail-logo">P</div>
-    <span class="rail-title">Studio</span>
+    <div class="rail-logo"><em>P</em></div>
+    <span class="rail-title">Prompt Studio</span>
     <span class="rail-header-spacer"></span>
-    <span class="rail-mode-tag" id="rail-mode-tag">v2</span>
+    <span class="rail-mode-tag" id="rail-mode-tag">eval</span>
   </div>
 
+  <!-- Prompt picker -->
+  <div class="rail-prompt-section">
+    <div class="rail-section-label">Active Prompt</div>
+    <select class="rail-prompt-select" id="prompt-picker">
+      <option value="">— loading… —</option>
+    </select>
+    <div class="rail-prompt-badges" id="prompt-badges"></div>
+  </div>
+
+  <!-- Model checklist -->
+  <div class="rail-model-section">
+    <div class="rail-section-label">Models</div>
+    <div id="model-checklist"></div>
+  </div>
+
+  <!-- Sessions list -->
   <div class="rail-new-wrap">
     <button class="rail-new-btn" id="new-session">
-      <span class="rail-new-plus">＋</span>
-      New session
+      <span class="rail-new-plus">+</span>
+      <span>New session</span>
       <span class="rail-new-spacer"></span>
       <span class="rail-new-kbd">⌘N</span>
     </button>
@@ -653,17 +733,23 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
 
   <div class="rail-saved-label">Sessions</div>
   <div class="rail-list" id="sessions-list"></div>
-
   <div class="rail-save-slot" id="sessions-save-slot"></div>
 
+  <!-- Bottom actions -->
+  <div class="rail-actions">
+    <button class="rail-action-btn primary" id="save-session-btn">Save session</button>
+    <button class="rail-action-btn" id="export-btn">Export .md</button>
+  </div>
+
+  <!-- Vault health -->
   <div class="rail-vault" id="vault-card">
-    <div class="rail-vault-row">
+    <div class="rail-vault-header">
       <span class="health-dot" id="vault-health" title="Vault search: checking…"></span>
-      <span>vault-search</span>
-      <span class="rail-vault-port">:8100</span>
+      <span>vault search</span>
     </div>
     <div class="rail-vault-sub" id="vault-card-sub">checking…</div>
   </div>
+
 </aside>
 
 <!-- ── Main area ──────────────────────────────────── -->
@@ -699,35 +785,45 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
       <button class="ghost-btn" id="export-btn">Export .md</button>
       <button class="stop-btn" id="stop-both" hidden>⏹ Stop both</button>
     </div>
-  </header>
+    <button class="stop-btn" id="stop-btn" hidden>⏹ Stop</button>
+  </div>
 
+  <!-- Pane container (eval mode) -->
   <main class="pane-container" id="pane-container" style="flex:1;display:flex;min-height:0;overflow:hidden;"></main>
 
-  <footer class="composer">
-    <div class="composer-field">
-      <span class="composer-label" id="composer-label">you</span>
-      <textarea id="input" placeholder="Message…" rows="2"></textarea>
-      <div class="composer-send-col">
+  <!-- Registry iframe (registry mode, hidden by default) -->
+  <iframe class="registry-frame" id="registry-frame" src="/registry/"></iframe>
+
+  <!-- Directive composer -->
+  <div class="composer" id="composer">
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">
+      <span class="composer-label" id="composer-label">Directive</span>
+      <span class="composer-directive-hint">→ sent to all active models</span>
+    </div>
+    <div style="display:flex;gap:8px;align-items:flex-end;">
+      <textarea id="input" placeholder="Enter directive…" rows="2" style="flex:1;resize:none;"></textarea>
+      <div style="display:flex;flex-direction:column;gap:4px;">
         <button id="send">SEND ↵</button>
         <span class="composer-hint" id="send-hint">shift+↵ newline</span>
       </div>
     </div>
-    <div class="composer-controls">
+    <div style="display:flex;gap:10px;align-items:center;margin-top:6px;">
       <label class="vault-label" id="vault-label-wrap">
         <span class="vault-checkbox-box" id="vault-checkbox-visual"></span>
-        <input type="checkbox" id="use-vault"
-               style="position:absolute;opacity:0;pointer-events:none;width:0;height:0">
-        use vault
+        <input type="checkbox" id="use-vault" style="display:none;">
+        use context
       </label>
       <span>top-K <input type="number" id="top-k" min="1" max="20" value="5" class="top-k-input"></span>
       <button class="ghost-btn" id="reindex">Reindex</button>
-      <span class="composer-spacer"></span>
       <span class="vault-inline-status" id="vault-status"></span>
     </div>
-  </footer>
+  </div>
 
 </div>
 
-<script type="module" src="./js/app.js"></script>
+<!-- ── Registry Panel (right) ──────────────────── -->
+<div id="registry-panel-mount"></div>
+
+<script type="module" src="js/app.js"></script>
 </body>
 </html>

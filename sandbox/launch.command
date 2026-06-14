@@ -29,6 +29,7 @@ free_port 7777
 free_port 8080
 free_port 8091
 free_port 8100
+free_port 8110
 
 osascript <<EOF
 tell application "Terminal"
@@ -37,6 +38,7 @@ tell application "Terminal"
     do script "bash '$DIR/_run-mlx-qwen.sh'"
     do script "bash '$DIR/_run-web.sh'"
     do script "bash '$DIR/_run-vault.sh'"
+    do script "bash '$DIR/_run-threadhub.sh'"
 end tell
 EOF
 
@@ -62,6 +64,12 @@ echo "Waiting for vault search (embedder loading)..."
 for i in {1..120}; do
   curl -sf http://localhost:8100/health >/dev/null 2>&1 && break
   sleep 1
+done
+
+echo "Waiting for ThreadHub..."
+for i in {1..60}; do
+  curl -sf http://localhost:8110/ >/dev/null 2>&1 && break
+  sleep 0.5
 done
 
 open "http://localhost:7777"

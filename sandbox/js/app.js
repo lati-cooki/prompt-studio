@@ -12,6 +12,9 @@ import {
   loadRegistryPromptBody,
   listLoadablePrompts,
 } from "./registry.js";
+import { paneContext } from './seal-extract.js';
+
+window.sealActivePane = () => paneContext(activePaneMap, ALL_MODELS);
 
 const paneContainer = document.getElementById("pane-container");
 const stateA = createPaneState(DEFAULT_SYSTEM_PROMPT);

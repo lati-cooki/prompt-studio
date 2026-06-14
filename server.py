@@ -59,7 +59,7 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 status=502,
             )
             return
-        self.send_raw_json(body.decode('utf-8'), status=status)
+        self.send_raw_json(body.decode('utf-8', errors='replace'), status=status)
 
     def handle_get_threads(self):
         self.proxy_threadhub_get("/threads")

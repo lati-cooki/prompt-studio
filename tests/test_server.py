@@ -211,6 +211,27 @@ class TestThreadsProxy(unittest.TestCase):
         self.assertEqual(mock_open.call_args[0][0], "http://localhost:8110/t/founding.json")
 
 
+class TestSealRoute(unittest.TestCase):
+    @patch("seal.seal_decision", return_value={"slug": "ship", "citationHash": "sha256:h"})
+    def test_seal_success(self, mock_seal):
+        h = MockHandler()
+        h.path = "/api/threads/seal"
+        h._set_body(json.dumps({"question": "q", "decision": "d", "decidedBy": "Troy",
+                                "evidence": [{"source": "s", "finding": "f"}]}).encode())
+        h.do_POST()
+        self.assertEqual(h._last_status, 200)
+        self.assertIn(b"ship", h._body_written)
+
+    @patch("seal.seal_decision", side_effect=__import__("seal").SealValidationError({"question": "required"}))
+    def test_seal_validation_error_is_400(self, mock_seal):
+        h = MockHandler()
+        h.path = "/api/threads/seal"
+        h._set_body(json.dumps({}).encode())
+        h.do_POST()
+        self.assertEqual(h._last_status, 400)
+        self.assertIn(b"question", h._body_written)
+
+
 class TestThreadsRoute(unittest.TestCase):
     def test_threads_route_serves_widget(self):
         h = MockHandler()

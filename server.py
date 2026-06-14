@@ -7,6 +7,7 @@ import json
 import sqlite3
 import urllib.request
 import urllib.error
+import seal
 
 def _load_dotenv(path=".env"):
     """Load key=value pairs from .env into os.environ (no-op if file absent)."""
@@ -408,6 +409,8 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             self.handle_post_prompts()
         elif self.path == '/api/chat':
             self.handle_post_chat()
+        elif self.path == '/api/threads/seal':
+            self.handle_seal()
         else:
             self.send_error(404)
 
@@ -802,6 +805,22 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(f"data: {error_chunk}\n\n".encode())
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
+
+    def handle_seal(self):
+        data = self.read_json_body()
+        if data is None:
+            return
+        try:
+            result = seal.seal_decision(data)
+        except seal.SealValidationError as e:
+            self.send_json({"error": "validation failed", "fields": e.fields}, status=400)
+            return
+        except seal.SealError as e:
+            body = {"error": e.message}
+            body.update(e.extra)
+            self.send_json(body, status=e.status)
+            return
+        self.send_json(result, status=200)
 
     def handle_get_prompts(self):
         conn = self.get_db()

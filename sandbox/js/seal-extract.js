@@ -118,6 +118,14 @@ export async function runExtraction(model, messages, fetchImpl) {
       if (content) out += content;
     }
   }
+  buffer += decoder.decode();
+  if (buffer.trim()) {
+    const { events } = parseSSEBuffer(buffer + '\n\n');
+    for (const ev of events) {
+      const { content } = extractSSEDelta(ev);
+      if (content) out += content;
+    }
+  }
   return out;
 }
 

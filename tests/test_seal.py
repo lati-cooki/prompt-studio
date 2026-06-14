@@ -111,6 +111,18 @@ class TestAuthorClistaLog(unittest.TestCase):
         with self.assertRaises(seal.SealError):
             seal.author_clista_log(self._data(), "/tmp/x")
 
+    @patch("seal.subprocess.run")
+    def test_non_json_stdout_raises_sealerror(self, run):
+        run.return_value = _proc("Usage: clista ...\n")  # non-JSON, returncode 0
+        with self.assertRaises(seal.SealError):
+            seal.author_clista_log(self._data(), "/tmp/x")
+
+    @patch("seal.subprocess.run")
+    def test_missing_key_in_response_raises_sealerror(self, run):
+        run.return_value = _proc(json.dumps({"unexpected": True}))  # no thread.id
+        with self.assertRaises(seal.SealError):
+            seal.author_clista_log(self._data(), "/tmp/x")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -57,7 +57,7 @@ def _capture(resp, *path):
     cur = resp
     for key in path:
         if not isinstance(cur, dict) or key not in cur:
-            raise SealError("unexpected clista response (missing "
+            raise SealError("unexpected response (missing "
                             + ".".join(path) + ")", extra={"response": resp})
         cur = cur[key]
     return cur
@@ -92,7 +92,7 @@ def _th(method, path, body=None):
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+            raw = resp.read().decode("utf-8")
     except urllib.error.HTTPError as e:
         status = 429 if e.code == 429 else 502
         raise SealError(f"ThreadHub {method} {path} returned {e.code}",
@@ -100,6 +100,11 @@ def _th(method, path, body=None):
     except urllib.error.URLError:
         raise SealError("ThreadHub is not reachable", status=502,
                         extra={"code": "threadhub_unreachable"})
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        raise SealError(f"ThreadHub {method} {path} returned non-JSON: {raw[:200]}",
+                        status=502, extra={"code": "threadhub_bad_response"})
 
 
 def ensure_author():
@@ -108,16 +113,16 @@ def ensure_author():
             cached = f.read().strip()
         if cached:
             return cached
-    author_id = _th("POST", "/identities",
-                    {"display_name": "Prompt Studio", "kind": "agent"})["id"]
+    author_id = _capture(_th("POST", "/identities",
+                             {"display_name": "Prompt Studio", "kind": "agent"}), "id")
     with open(AUTHOR_CACHE, "w") as f:
         f.write(author_id)
     return author_id
 
 
 def write_to_threadhub(events_path, title, question, author_id):
-    slug = _th("POST", "/threads",
-               {"title": title, "question": question, "author": author_id})["slug"]
+    slug = _capture(_th("POST", "/threads",
+                        {"title": title, "question": question, "author": author_id}), "slug")
     try:
         with open(events_path) as f:
             for line in f:

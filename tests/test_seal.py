@@ -170,6 +170,21 @@ class TestThreadHubWrite(unittest.TestCase):
         self.assertEqual(ctx.exception.extra.get("code"), "threadhub_unreachable")
 
 
+    @patch("seal.urllib.request.urlopen")
+    def test_non_json_200_raises_sealerror(self, urlopen):
+        class _RawResp:
+            def read(self_):
+                return b"<html>not json</html>"
+            def __enter__(self_):
+                return self_
+            def __exit__(self_, *a):
+                return False
+        urlopen.return_value = _RawResp()
+        with self.assertRaises(seal.SealError) as ctx:
+            seal._th("GET", "/threads")
+        self.assertEqual(ctx.exception.status, 502)
+
+
 class TestEnsureAuthor(unittest.TestCase):
     def setUp(self):
         self._orig = seal.AUTHOR_CACHE

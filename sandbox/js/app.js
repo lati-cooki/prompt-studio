@@ -385,6 +385,15 @@ $input.addEventListener("input", () => {
   for (const { meter } of Object.values(activePaneMap)) meter?.render();
 });
 
+// ── Sidebar footer ──────────────────────────────────────
+function updateSidebarFoot() {
+  const foot = document.getElementById('sidebar-foot');
+  if (!foot) return;
+  const vault = (document.getElementById('vault-card-sub')?.textContent || '').trim();
+  const model = (typeof getActiveModelKey === 'function') ? getActiveModelKey() : '';
+  foot.textContent = `vault: ${vault || '—'}${model ? ' · ' + model : ''}`;
+}
+
 // ── Vault ───────────────────────────────────────────────
 function syncVaultCheckbox() {
   $vaultCheckVisual.classList.toggle("checked", $useVault.checked);
@@ -414,6 +423,7 @@ async function tickVaultHealth() {
   const state = await pingVaultHealth();
   $vaultHealth.className    = `health-dot ${state}`;
   $vaultCardSub.textContent = state === "ok" ? "online" : "unreachable";
+  updateSidebarFoot();
 }
 tickVaultHealth();
 setInterval(tickVaultHealth, 10000);
@@ -666,6 +676,7 @@ async function init() {
   syncPanes();
   loadRegistryPrompts();
   refreshSessionList();
+  updateSidebarFoot();
 }
 init();
 

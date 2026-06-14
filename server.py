@@ -1,5 +1,6 @@
 import http.server
 import mimetypes
+import re
 import socketserver
 import json
 import sqlite3
@@ -13,7 +14,7 @@ THREADHUB_PORT = 8110
 
 
 def is_safe_slug(slug):
-    return bool(slug) and '/' not in slug and '..' not in slug
+    return bool(slug) and re.fullmatch(r'[A-Za-z0-9_-]+', slug) is not None
 
 
 class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
@@ -64,15 +65,19 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
     def handle_get_threads(self):
         self.proxy_threadhub_get("/threads")
 
-    def handle_get_thread(self, slug):
+    def _reject_bad_slug(self, slug):
         if not is_safe_slug(slug):
             self.send_error(400, "Invalid slug")
+            return True
+        return False
+
+    def handle_get_thread(self, slug):
+        if self._reject_bad_slug(slug):
             return
         self.proxy_threadhub_get(f"/t/{slug}.json")
 
     def handle_get_thread_verify(self, slug):
-        if not is_safe_slug(slug):
-            self.send_error(400, "Invalid slug")
+        if self._reject_bad_slug(slug):
             return
         self.proxy_threadhub_get(f"/t/{slug}/verify")
 

@@ -124,6 +124,12 @@ class TestSlugValidation(unittest.TestCase):
     def test_rejects_empty(self):
         self.assertFalse(server.is_safe_slug(""))
 
+    def test_rejects_percent_encoded_and_other_chars(self):
+        self.assertFalse(server.is_safe_slug("%2Fetc%2Fpasswd"))
+        self.assertFalse(server.is_safe_slug("a%00"))
+        self.assertFalse(server.is_safe_slug("a.b"))
+        self.assertFalse(server.is_safe_slug("a?b"))
+
 
 class FakeResp:
     def __init__(self, body, status=200):
@@ -148,6 +154,7 @@ class TestThreadsProxy(unittest.TestCase):
         h.handle_get_threads()
         self.assertEqual(h._last_status, 200)
         self.assertIn(b'founding', h._body_written)
+        self.assertEqual(mock_open.call_args[0][0], "http://localhost:8110/threads")
 
     @patch("server.urllib.request.urlopen",
            side_effect=server.urllib.error.URLError("connection refused"))
@@ -172,6 +179,7 @@ class TestThreadsProxy(unittest.TestCase):
         h.handle_get_thread_verify("founding")
         self.assertEqual(h._last_status, 200)
         self.assertIn(b'"valid":true', h._body_written)
+        self.assertEqual(mock_open.call_args[0][0], "http://localhost:8110/t/founding/verify")
 
     def test_thread_detail_rejects_bad_slug(self):
         h = MockHandler()
@@ -182,6 +190,15 @@ class TestThreadsProxy(unittest.TestCase):
         h = MockHandler()
         h.handle_get_thread_verify("a/b")
         self.assertEqual(h._last_status, 400)
+
+    @patch("server.urllib.request.urlopen",
+           side_effect=server.urllib.error.HTTPError(
+               "http://x", 404, "Not Found", {}, io.BytesIO(b'{"error":"nf","code":"not_found"}')))
+    def test_thread_detail_forwards_upstream_404(self, mock_open):
+        h = MockHandler()
+        h.handle_get_thread("founding")
+        self.assertEqual(h._last_status, 404)
+        self.assertIn(b'not_found', h._body_written)
 
     @patch("server.urllib.request.urlopen")
     def test_thread_detail_strips_query_string(self, mock_open):

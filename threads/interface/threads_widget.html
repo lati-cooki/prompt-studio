@@ -99,20 +99,30 @@ async function fillBadge(slug) {
 async function showDetail(slug) {
   view.innerHTML = '<p class="sub"><a class="back" id="back">← all threads</a></p><p class="sub">Loading…</p>';
   document.getElementById('back').addEventListener('click', showList);
-  let chain, verify;
+  let chain;
   try {
-    [chain, verify] = await Promise.all([
-      getJSON('/api/threads/' + encodeURIComponent(slug)),
-      getJSON('/api/threads/' + encodeURIComponent(slug) + '/verify'),
-    ]);
+    chain = await getJSON('/api/threads/' + encodeURIComponent(slug));
   } catch (e) {
     view.innerHTML = '<p class="sub"><a class="back" id="back2">← all threads</a></p><p class="err">Could not load thread (' + esc(e.message) + ')</p>';
     document.getElementById('back2').addEventListener('click', showList);
     return;
   }
-  const badge = verify.valid
-    ? `<span class="badge ok">✓ chain verified · ${esc(verify.records)} records</span>`
-    : `<span class="badge bad">✗ chain broken · ${esc((verify.problems || []).join('; '))}</span>`;
+  if (!Array.isArray(chain)) {
+    view.innerHTML = '<p class="sub"><a class="back" id="back2b">← all threads</a></p><p class="err">Unexpected response for this thread.</p>';
+    document.getElementById('back2b').addEventListener('click', showList);
+    return;
+  }
+  let badge = '<span class="badge pending">verifying…</span>';
+  let head = '';
+  try {
+    const verify = await getJSON('/api/threads/' + encodeURIComponent(slug) + '/verify');
+    badge = verify.valid
+      ? `<span class="badge ok">✓ chain verified · ${esc(verify.records)} records</span>`
+      : `<span class="badge bad">✗ chain broken · ${esc((verify.problems || []).join('; '))}</span>`;
+    head = ' · head ' + short(verify.head);
+  } catch (e) {
+    badge = '<span class="badge bad">✗ verification unavailable (' + esc(e.message) + ')</span>';
+  }
   const rows = chain.map(r => `
     <div class="rec">
       <span class="k">seq ${esc(r.seq)} · ${esc(r.kind)} · ${esc(r.author)}</span><br>
@@ -121,7 +131,7 @@ async function showDetail(slug) {
   view.innerHTML = `
     <p class="sub"><a class="back" id="back3">← all threads</a></p>
     <h1 style="font-size:18px">${esc(slug)}</h1>
-    <p>${badge} · head ${short(verify.head)}</p>
+    <p>${badge}${head}</p>
     ${rows}`;
   document.getElementById('back3').addEventListener('click', showList);
 }

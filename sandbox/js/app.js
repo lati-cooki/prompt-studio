@@ -16,6 +16,7 @@ import { paneContext } from './seal-extract.js';
 import { createRegistryPanel } from './registry-panel.js';
 import { createModelSelector } from './model-selector.js';
 import * as api from './api.js';
+import { resolveView } from './view.js';
 
 // ── App state ──────────────────────────────────────────
 const activePaneMap      = {};
@@ -71,6 +72,7 @@ const $registryPanelMount = document.getElementById("registry-panel-mount");
 const $tabEval           = document.getElementById("tab-eval");
 const $tabRegistry       = document.getElementById("tab-registry");
 const $registryFrame     = document.getElementById("registry-frame");
+const $decisionsFrame    = document.getElementById('decisions-frame');
 const $composer          = document.getElementById("composer");
 
 // ── Registry panel ─────────────────────────────────────
@@ -256,15 +258,35 @@ const $composerLabel = document.getElementById("composer-label");
 const $sendHint      = document.getElementById("send-hint");
 const $railModeTag   = document.getElementById("rail-mode-tag");
 
+// ── View router ─────────────────────────────────────────
+function showView(raw) {
+  const view = resolveView(raw);
+  const isDeliberate = view === 'deliberate';
+  const isRegistry = view === 'registry';
+  const isDecisions = view === 'decisions';
+  const isHome = view === 'home';
+  // Deliberate (sandbox) surfaces
+  $paneContainer.style.display      = isDeliberate ? "" : "none";
+  $composer.style.display           = isDeliberate ? "" : "none";
+  $registryPanelMount.style.display = isDeliberate ? "" : "none";
+  // Embedded views (lazy src on first show)
+  $registryFrame.style.display  = isRegistry  ? "block" : "none";
+  $decisionsFrame.style.display = isDecisions ? "block" : "none";
+  if (isDecisions && !$decisionsFrame.src && $decisionsFrame.dataset.src) {
+    $decisionsFrame.src = $decisionsFrame.dataset.src;
+  }
+  // Home view section (added next task; guard for absence)
+  const homeEl = document.getElementById('view-home');
+  if (homeEl) homeEl.style.display = isHome ? "" : "none";
+  // Sidebar active state (added next task; guard for absence)
+  document.querySelectorAll('[data-view]').forEach((el) =>
+    el.classList.toggle('nav-active', el.dataset.view === view));
+  if (location.hash.replace(/^#/, '') !== view) location.hash = view;
+}
+
 // ── Tab switching ───────────────────────────────────────
 function switchTab(tab) {
-  const isRegistry = tab === "registry";
-  $paneContainer.style.display      = isRegistry ? "none" : "";
-  $composer.style.display           = isRegistry ? "none" : "";
-  $registryPanelMount.style.display = isRegistry ? "none" : "";
-  $registryFrame.style.display      = isRegistry ? "block" : "none";
-  $tabEval?.classList.toggle("seg-active", !isRegistry);
-  $tabRegistry?.classList.toggle("seg-active", isRegistry);
+  showView(tab === 'registry' ? 'registry' : 'deliberate');
 }
 
 $tabEval?.addEventListener("click", () => switchTab("eval"));
@@ -625,7 +647,6 @@ document.addEventListener("keydown", (e) => {
 
 // ── Boot ─────────────────────────────────────────────────
 async function init() {
-  switchTab("eval");
   await loadLMStudioModels();   // discover local models (2s timeout, non-blocking)
   buildModelSelector();         // build checklist with discovered models + frontier
   syncPanes();
@@ -633,3 +654,6 @@ async function init() {
   refreshSessionList();
 }
 init();
+
+window.addEventListener('hashchange', () => showView(location.hash));
+showView(location.hash || 'deliberate');

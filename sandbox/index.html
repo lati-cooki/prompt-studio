@@ -699,6 +699,16 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
 .home-step { flex: 1; border: 1px solid var(--line); border-radius: 6px; padding: 14px; font-size: 13px; }
 .home-step .ex { display: block; margin-top: 8px; font-style: italic; color: var(--ink-3); border-left: 2px solid var(--line); padding-left: 8px; font-size: 12px; }
 .home-cta { display: inline-block; background: var(--ink); color: #fff; border: none; padding: 9px 18px; border-radius: 5px; font: inherit; cursor: pointer; }
+.home-pieces details { border: 1px solid var(--line); border-bottom: none; }
+.home-pieces details:last-child { border-bottom: 1px solid var(--line); }
+.home-pieces summary { padding: 8px 10px; cursor: pointer; font-size: 13px; list-style: none; }
+.home-pieces summary::-webkit-details-marker { display: none; }
+.home-pieces summary::before { content: '▸ '; color: var(--ink-4); }
+.home-pieces details[open] summary::before { content: '▾ '; }
+.home-pieces p { margin: 0 0 8px 24px; font-size: 12px; color: var(--ink-3); padding-right: 10px; }
+.home-flow { font-family: var(--mono); font-size: 11px; color: var(--ink-4); margin-top: 10px; }
+.sessions-view { max-width: 720px; margin: 0 auto; padding: 48px 24px; overflow-y: auto; }
+.sessions-view-empty { color: var(--ink-4); font-size: 13px; padding: 16px 0; }
 </style>
 </head>
 <body>
@@ -711,7 +721,7 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
   <button class="nav-item" data-view="decisions" type="button">Decisions</button>
   <div class="sidebar-group-label">Library</div>
   <button class="nav-item" data-view="registry" type="button">Registry</button>
-  <button class="nav-item" id="nav-sessions" type="button">Sessions</button>
+  <button class="nav-item" id="nav-sessions" data-view="sessions" type="button">Sessions</button>
   <div class="sidebar-foot" id="sidebar-foot">— loading…</div>
 </aside>
 
@@ -824,6 +834,14 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
         <div class="home-step"><strong>③ Notarize</strong><br>A signed, verifiable record lands in Decisions.
           <span class="ex">→ ship-the-support-beta · 9 records · ✓ chain valid — citeable by hash, forever.</span></div>
       </div>
+      <div style="font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-4);margin:18px 0 6px">How the pieces work together</div>
+      <div class="home-pieces">
+        <details open><summary><strong>Prompt sandbox</strong> — where you deliberate</summary><p>Chat a decision through with your chosen model. Load a system prompt from the Registry to set the model's role.</p></details>
+        <details><summary><strong>Registry</strong> — your versioned prompt library</summary><p>Save, version, and grade reusable system prompts; load one into the sandbox to start a deliberation from a known footing.</p></details>
+        <details><summary><strong>ClisTa Protocol</strong> — shapes the decision</summary><p>Turns the conversation into a validated, accountable decision log — question, decision, evidence, and surviving objections — checked for structural validity.</p></details>
+        <details><summary><strong>ThreadHub</strong> — notarizes &amp; stores it</summary><p>Signs and hash-chains the ClisTa log into a permanent, verifiable record. The Decisions view reads it back; cite a decision by its hash.</p></details>
+      </div>
+      <p class="home-flow">prompt → deliberate → ClisTa shapes → ThreadHub notarizes → Decisions</p>
       <button class="home-cta" id="home-start-btn" type="button">Start a session →</button>
       <p style="color:var(--ink-4);margin-top:12px;font-size:12px">Local &amp; frontier models supported.</p>
     </div>
@@ -833,6 +851,15 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
       <button class="home-cta" id="home-new-btn" type="button">+ New session</button>
       <div id="home-recent" style="margin-top:18px"></div>
     </div>
+  </section>
+
+  <section class="sessions-view" id="view-sessions" style="display:none">
+    <div style="display:flex;justify-content:space-between;align-items:center">
+      <h1 style="font-weight:600;margin:0">Sessions</h1>
+      <button class="home-cta" id="sessions-view-new" type="button">+ New session</button>
+    </div>
+    <p style="color:var(--ink-3);margin:4px 0 14px;font-size:13px">Saved deliberations. Click one to reopen it in Deliberate.</p>
+    <div id="sessions-view-list"></div>
   </section>
 
   <!-- Pane container (eval mode) -->

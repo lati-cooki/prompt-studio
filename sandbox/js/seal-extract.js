@@ -26,35 +26,41 @@ function _coerce(obj) {
   return { question: _str(obj.question), decision: _str(obj.decision), evidence, objections };
 }
 
+const _EXPECTED_KEYS = ['question', 'decision', 'evidence', 'objections'];
+
 export function parseExtraction(text) {
   if (typeof text !== 'string') throw new Error('no response text');
-  const start = text.indexOf('{');
-  if (start === -1) throw new Error('no JSON object in response');
-  let depth = 0, inStr = false, esc = false, end = -1;
-  for (let i = start; i < text.length; i++) {
-    const c = text[i];
-    if (inStr) {
-      if (esc) esc = false;
-      else if (c === '\\') esc = true;
-      else if (c === '"') inStr = false;
-    } else if (c === '"') {
-      inStr = true;
-    } else if (c === '{') {
-      depth++;
-    } else if (c === '}') {
-      depth--;
-      if (depth === 0) { end = i; break; }
+  let best = null;
+  let searchFrom = 0;
+  for (;;) {
+    const start = text.indexOf('{', searchFrom);
+    if (start === -1) break;
+    let depth = 0, inStr = false, esc = false, end = -1;
+    for (let i = start; i < text.length; i++) {
+      const c = text[i];
+      if (inStr) {
+        if (esc) esc = false;
+        else if (c === '\\') esc = true;
+        else if (c === '"') inStr = false;
+      } else if (c === '"') {
+        inStr = true;
+      } else if (c === '{') {
+        depth++;
+      } else if (c === '}') {
+        depth--;
+        if (depth === 0) { end = i; break; }
+      }
     }
+    if (end === -1) break;
+    let obj = null;
+    try { obj = JSON.parse(text.slice(start, end + 1)); } catch (e) { obj = null; }
+    if (obj && typeof obj === 'object' && _EXPECTED_KEYS.some((k) => k in obj)) {
+      best = obj;
+    }
+    searchFrom = end + 1;
   }
-  if (end === -1) throw new Error('unbalanced JSON in response');
-  let obj;
-  try {
-    obj = JSON.parse(text.slice(start, end + 1));
-  } catch (e) {
-    throw new Error('could not parse JSON: ' + e.message);
-  }
-  if (!obj || typeof obj !== 'object') throw new Error('parsed value is not an object');
-  return _coerce(obj);
+  if (!best) throw new Error('no extractable JSON object in response');
+  return _coerce(best);
 }
 
 export function buildExtractionMessages(transcript) {

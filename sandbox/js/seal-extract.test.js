@@ -64,3 +64,14 @@ test('parseExtraction: garbage throws', () => {
   assert.throws(() => parseExtraction('no json here'));
   assert.throws(() => parseExtraction(''));
 });
+
+test('parseExtraction: braces inside a string value do not end the object', () => {
+  const out = parseExtraction('{"question":"Q","decision":"Rejected {see note}","evidence":[],"objections":[]}');
+  assert.strictEqual(out.decision, 'Rejected {see note}');
+});
+
+test('parseExtraction: skips a balanced {...} in prose before the real object', () => {
+  const out = parseExtraction('Template: {"key":"val"} was used.\n{"question":"Q","decision":"D","evidence":[],"objections":[]}');
+  assert.strictEqual(out.question, 'Q');
+  assert.strictEqual(out.decision, 'D');
+});

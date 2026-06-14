@@ -2,10 +2,10 @@ import { createPaneState }     from "./state.js";
 import { createPane }          from "./pane.js";
 import { sendToPanes }         from "./send.js";
 import { pingVaultHealth, reindexVault } from "./vault.js";
-import { ALL_MODELS, FRONTIER_MODELS, LM_STUDIO_URL, getActiveModelKey } from "./config.js";
+import { ALL_MODELS, FRONTIER_MODELS, LM_STUDIO_URL, getActiveModelKey, DEFAULT_SYSTEM_PROMPT } from "./config.js";
 import { renderSaveSlot, renderSessionList } from "./session-rail.js";
 import { buildMarkdown, triggerMarkdownDownload, slugify } from "./export.js";
-import { createSessionsStore, resolveModelKey } from "./sessions.js";
+import { createSessionsStore, resolveModelKey, resolveSession } from "./sessions.js";
 import { createMeter }                          from "./meter.js";
 import {
   fetchRegistryIndex,
@@ -13,6 +13,17 @@ import {
   listLoadablePrompts,
 } from "./registry.js";
 import { paneContext } from './seal-extract.js';
+import { createRegistryPanel } from './registry-panel.js';
+import { createModelSelector } from './model-selector.js';
+import * as api from './api.js';
+
+// ── App state ──────────────────────────────────────────
+const activePaneMap      = {};
+const liveModels         = {};
+let   selectedModelKeys  = new Set(Object.keys(FRONTIER_MODELS).slice(0, 1));
+let   activeSessionId    = null;
+let   activePrompt       = null;
+const registryPromptsMap = new Map();
 
 window.sealActivePane = () => paneContext(activePaneMap, ALL_MODELS);
 
@@ -28,7 +39,7 @@ const paneA = createPane({
   id:              "A",
   container:       paneContainer,
   initialPrompt:   DEFAULT_SYSTEM_PROMPT,
-  modelKeys:       Object.keys(MODELS),
+  modelKeys:       Object.keys(ALL_MODELS),
   initialModelKey: modelKeyA,
 });
 
@@ -81,7 +92,7 @@ function buildModelSelector(initialKeys) {
   $modelChecklist.innerHTML = "";
   createModelSelector({
     container:   $modelChecklist,
-    models:      liveModels,
+    models:      { ...FRONTIER_MODELS, ...liveModels },
     initialKeys: initialKeys ?? [...selectedModelKeys],
     onChange(keys) {
       selectedModelKeys = keys;
@@ -185,6 +196,23 @@ function populatePromptPicker(prompts) {
   }
 }
 
+async function loadRegistryPrompts() {
+  try {
+    const index   = await fetchRegistryIndex();
+    const prompts = listLoadablePrompts(index);
+    registryPromptsMap.clear();
+    for (const p of prompts) {
+      try {
+        const body = await loadRegistryPromptBody(p.file);
+        registryPromptsMap.set(`${p.id}|${p.version}`, { ...p, body });
+      } catch { /* skip unparseable prompt */ }
+    }
+    populatePromptPicker([...registryPromptsMap.values()]);
+  } catch (err) {
+    console.warn("Registry unavailable:", err.message);
+  }
+}
+
 function applyPromptToAllPanes(prompt) {
   activePrompt = prompt;
   const body = prompt?.body ?? "";
@@ -221,19 +249,12 @@ $promptPicker.addEventListener("change", () => {
 const $segSingle     = document.getElementById("seg-single");
 const $segCompare    = document.getElementById("seg-compare");
 const $stopBoth      = document.getElementById("stop-both");
-const $exportBtn     = document.getElementById("export-btn");
 const $registrySelect = document.getElementById("registry-prompt-select");
 const $registryLoadBtn = document.getElementById("registry-load-btn");
 const $registryStatus  = document.getElementById("registry-status");
 const $composerLabel = document.getElementById("composer-label");
 const $sendHint      = document.getElementById("send-hint");
-const $topbarSession = document.getElementById("topbar-session");
-const $topbarSubtitle = document.getElementById("topbar-subtitle");
-const $topbarDots    = document.getElementById("topbar-dots");
 const $railModeTag   = document.getElementById("rail-mode-tag");
-const $sessionsList  = document.getElementById("sessions-list");
-const $vaultCardSub  = document.getElementById("vault-card-sub");
-const $vaultCheckVisual = document.getElementById("vault-checkbox-visual");
 
 // ── Tab switching ───────────────────────────────────────
 function switchTab(tab) {
@@ -242,12 +263,12 @@ function switchTab(tab) {
   $composer.style.display           = isRegistry ? "none" : "";
   $registryPanelMount.style.display = isRegistry ? "none" : "";
   $registryFrame.style.display      = isRegistry ? "block" : "none";
-  $tabEval.classList.toggle("seg-active",     !isRegistry);
-  $tabRegistry.classList.toggle("seg-active",  isRegistry);
+  $tabEval?.classList.toggle("seg-active", !isRegistry);
+  $tabRegistry?.classList.toggle("seg-active", isRegistry);
 }
 
-$tabEval.addEventListener("click",     () => switchTab("eval"));
-$tabRegistry.addEventListener("click", () => switchTab("registry"));
+$tabEval?.addEventListener("click", () => switchTab("eval"));
+$tabRegistry?.addEventListener("click", () => switchTab("registry"));
 
 window.addEventListener("message", (e) => {
   if (e.data?.type !== "loadPrompt") return;

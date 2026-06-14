@@ -30,6 +30,8 @@ def _s(v):
 
 
 def validate_payload(payload):
+    if not isinstance(payload, dict):
+        raise SealValidationError({"payload": "must be a JSON object"})
     fields = {}
     question = _s(payload.get("question"))
     decision = _s(payload.get("decision"))
@@ -41,16 +43,20 @@ def validate_payload(payload):
     if not decided_by:
         fields["decidedBy"] = "required"
 
+    evidence_in = payload.get("evidence")
     evidence = []
-    for e in (payload.get("evidence") or []):
+    for e in (evidence_in if isinstance(evidence_in, list) else []):
+        if not isinstance(e, dict):
+            continue
         source, finding = _s(e.get("source")), _s(e.get("finding"))
         if source and finding:
             evidence.append({"source": source, "finding": finding})
     if not evidence:
         fields["evidence"] = "at least one evidence item (source + finding) required"
 
+    objections_in = payload.get("objections")
     objections = []
-    for o in (payload.get("objections") or []):
+    for o in (objections_in if isinstance(objections_in, list) else []):
         text = _s(o.get("text")) if isinstance(o, dict) else _s(o)
         if text:
             objections.append(text)

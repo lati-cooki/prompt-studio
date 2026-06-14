@@ -42,6 +42,21 @@ class TestValidatePayload(unittest.TestCase):
             seal.validate_payload(p)
         self.assertIn("evidence", ctx.exception.fields)
 
+    def test_non_dict_payload_raises(self):
+        with self.assertRaises(seal.SealValidationError):
+            seal.validate_payload(["not", "a", "dict"])
+
+    def test_non_dict_evidence_items_skipped(self):
+        p = self._valid(); p["evidence"] = ["bad", None, {"source": "s", "finding": "f"}]
+        out = seal.validate_payload(p)
+        self.assertEqual(out["evidence"], [{"source": "s", "finding": "f"}])
+
+    def test_non_list_evidence_treated_as_missing(self):
+        p = self._valid(); p["evidence"] = "oops"
+        with self.assertRaises(seal.SealValidationError) as ctx:
+            seal.validate_payload(p)
+        self.assertIn("evidence", ctx.exception.fields)
+
 
 if __name__ == "__main__":
     unittest.main()

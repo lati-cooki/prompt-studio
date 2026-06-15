@@ -317,8 +317,9 @@ function showView(raw) {
   const isRegistry = view === 'registry';
   const isDecisions = view === 'decisions';
   const isHome = view === 'home';
-  // Deliberate-only chrome
-  if ($sessionsRail) $sessionsRail.style.display = isDeliberate ? "" : "none";
+  // Deliberate-only chrome. The Setup rail is a drawer — hidden until the
+  // ⚙ Setup toggle opens it, so the default Deliberate is just the conversation.
+  if ($sessionsRail) $sessionsRail.style.display = (isDeliberate && document.body.classList.contains('setup-open')) ? "" : "none";
   if ($topbar) $topbar.style.display = isDeliberate ? "" : "none";
   // Deliberate (sandbox) surfaces
   $paneContainer.style.display      = isDeliberate ? "" : "none";
@@ -352,6 +353,13 @@ const $homeNew = document.getElementById('home-new-btn');
 if ($homeNew) $homeNew.addEventListener('click', () => { document.getElementById('new-session')?.click(); showView('deliberate'); });
 const $sessionsViewNew = document.getElementById('sessions-view-new');
 if ($sessionsViewNew) $sessionsViewNew.addEventListener('click', () => { document.getElementById('new-session')?.click(); showView('deliberate'); });
+// ⚙ Setup drawer toggle (reveals the prompt/model/vault rail on demand)
+const $setupToggle = document.getElementById('setup-toggle');
+if ($setupToggle) $setupToggle.addEventListener('click', () => {
+  const open = document.body.classList.toggle('setup-open');
+  $setupToggle.classList.toggle('seg-active', open);
+  if ($sessionsRail) $sessionsRail.style.display = open ? "" : "none";
+});
 
 // ── Tab switching ───────────────────────────────────────
 function switchTab(tab) {

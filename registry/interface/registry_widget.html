@@ -386,6 +386,17 @@ async function loadRegistry() {
   }
 }
 
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"]/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+function costStr(c) {
+  if (c == null || c === "") return "—";
+  const n = Number(c);
+  return isFinite(n) ? "$" + n.toFixed(2) : "—";
+}
+
 function render() {
   let rows = data.filter(d => activeFilter === "all" || d.tier === activeFilter);
   rows.sort((a, b) => {

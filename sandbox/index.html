@@ -731,6 +731,15 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
    not part of the deliberate→shape→notarize flow — hide it by default so
    Deliberate is just: setup rail · conversation · input. */
 #registry-panel-mount { display: none !important; }
+
+/* Single pane by default. The upstream merge left two pane systems: a legacy
+   `paneA` (data-pane-id="A") + the model-checklist panes (data-pane-id="<model>")
+   that actually receive chats. Retire the legacy paneA visually so Deliberate
+   shows one conversation; "Compare" = check a 2nd model in the Setup drawer. */
+.pane[data-pane-id="A"] { display: none !important; }
+/* The legacy Single/Compare toggle and the topbar registry-load both drive the
+   retired paneA path; hide them (Models checklist + rail prompt-picker are live). */
+#mode-toggle, .registry-load { display: none !important; }
 </style>
 </head>
 <body>

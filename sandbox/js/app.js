@@ -148,7 +148,7 @@ function createOrUpdatePane(modelKey) {
   const meter = createMeter({
     pane,
     state,
-    contextWindow: liveModels[modelKey]?.contextWindow ?? 32768,
+    contextWindow: ALL_MODELS[modelKey]?.contextWindow ?? 32768,
     getDraftText:  () => $input.value,
   });
   pane.onUsage = (usage) => {
@@ -179,7 +179,7 @@ function activePanes() {
   return Object.entries(activePaneMap).map(([modelKey, { state, pane }]) => ({
     state,
     pane,
-    model: liveModels[modelKey],
+    model: ALL_MODELS[modelKey],
   }));
 }
 

@@ -517,7 +517,7 @@ function loadEntry(entry) {
   const { promptRef, models, panes, vaultConfig } = resolveSession(entry);
 
   if (models.length) {
-    const valid = models.filter(k => liveModels[k]);
+    const valid = models.filter(k => ALL_MODELS[k]);
     if (valid.length) {
       selectedModelKeys = new Set(valid);
       buildModelSelector([...selectedModelKeys]);

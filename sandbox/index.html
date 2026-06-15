@@ -306,20 +306,11 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
   flex-shrink: 0;
 }
 
-/* Compare mode: top stripe */
-.compare .pane[data-pane-id="A"] .pane-prompt {
-  border-top: 1.5px solid var(--teal);
-}
-.compare .pane[data-pane-id="B"] .pane-prompt {
-  border-top: 1.5px solid var(--plum);
-}
-
 /* Label row */
 .pane-label-row {
   display: flex; align-items: baseline; justify-content: space-between;
   padding: 14px 20px 6px;
 }
-.compare .pane .pane-label-row { display: none; }
 .pane-prompt-label {
   font-family: var(--mono); font-size: 9px;
   letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink-4);
@@ -330,7 +321,6 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
   display: flex; align-items: center; gap: 10px;
   padding: 0 20px;
 }
-.compare .pane .pane-meta-row { padding: 12px 16px 8px; }
 
 /* Pane badge (compare mode) */
 .pane-badge {
@@ -338,9 +328,6 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
   padding: 2px 8px; color: #fff; letter-spacing: 0.06em;
   flex-shrink: 0;
 }
-.compare .pane .pane-badge { display: inline-flex; }
-.compare .pane[data-pane-id="A"] .pane-badge { background: var(--teal); }
-.compare .pane[data-pane-id="B"] .pane-badge { background: var(--plum); }
 
 /* Model select */
 .pane-model-select {
@@ -361,7 +348,6 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
   width: 120px; height: 2px;
   background: var(--line-2); overflow: hidden; flex-shrink: 0;
 }
-.compare .pane .meter-bar { width: 80px; }
 .meter-fill {
   height: 100%; background: var(--teal);
   transition: width 0.1s linear, background 0.2s;
@@ -369,9 +355,6 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
 }
 .meter.amber .meter-fill { background: var(--amber); }
 .meter.red   .meter-fill { background: var(--red); }
-.compare .pane[data-pane-id="B"] .meter-fill { background: var(--plum); }
-.compare .pane[data-pane-id="B"] .meter.amber .meter-fill { background: var(--amber); }
-.compare .pane[data-pane-id="B"] .meter.red   .meter-fill { background: var(--red); }
 
 /* Prompt body (preview / click-to-edit) */
 .pane-prompt-body {
@@ -386,7 +369,6 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
   transition: border-color 0.1s;
 }
 .pane-prompt-body:hover { border-color: var(--line); }
-.compare .pane[data-pane-id="B"] .pane-prompt-body { border-left-color: var(--plum); }
 .pane-prompt-gt { color: var(--ink-4); }
 
 .pane-prompt.collapsed .pane-prompt-body { display: none; }
@@ -411,9 +393,6 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
   transition: border-color 0.1s;
 }
 .pane-prompt-textarea:focus { border-color: var(--teal); }
-.compare .pane[data-pane-id="B"] .pane-prompt-textarea { border-left-color: var(--plum); }
-.compare .pane[data-pane-id="B"] .pane-prompt-textarea:focus { border-color: var(--plum); }
-
 .pane-apply-reset {
   align-self: flex-end;
   background: var(--ink); color: var(--paper); border: none;
@@ -426,13 +405,6 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
   margin: 7px 20px 12px;
   font-family: var(--mono); font-size: 10px; color: var(--ink-4);
 }
-.compare .pane .pane-prompt-hint { display: none; }
-.compare .pane .pane-prompt-body {
-  margin: 0 16px 0; font-size: 11px;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.compare .pane .pane-meta-row { margin-bottom: 8px; }
-
 /* ── Log ─────────────────────────────────────────── */
 .pane-log {
   flex: 1; overflow-y: auto;
@@ -453,8 +425,6 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
     var(--line-3) 26px, var(--line-3) 27px
   );
 }
-.compare .pane .pane-log { padding: 18px 18px 24px; }
-
 /* ── Bubbles ─────────────────────────────────────── */
 .bubble-wrap {
   display: flex; flex-direction: column;
@@ -484,8 +454,6 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
   border: 1px solid var(--line-2);
   border-left: 2px solid var(--teal);
 }
-.compare .pane[data-pane-id="B"] .bubble.assistant { border-left-color: var(--plum); }
-
 .bubble.error { color: var(--red); border-color: var(--red); }
 .bubble.pending { color: var(--ink-4); animation: pulse 1.4s ease-in-out infinite; }
 .bubble.assistant.pending::after {
@@ -494,7 +462,6 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
   background: var(--teal); vertical-align: text-bottom;
   margin-left: 3px; opacity: 0.7;
 }
-.compare .pane[data-pane-id="B"] .bubble.assistant.pending::after { background: var(--plum); }
 @keyframes pulse { 0%,100%{opacity:.85} 50%{opacity:.35} }
 
 .bubble.assistant .reasoning {

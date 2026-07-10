@@ -314,7 +314,8 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                     data = f.read()
                 lm_url = os.environ.get('LM_STUDIO_URL', '')
                 if lm_url:
-                    inject = f'<script>window.LM_STUDIO_URL="{lm_url}";</script>'.encode()
+                    safe_lm_url = json.dumps(lm_url).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+                    inject = f'<script>window.LM_STUDIO_URL={safe_lm_url};</script>'.encode()
                     data = data.replace(b'<script type="module"', inject + b'<script type="module"', 1)
                 self.__class__._cached_index_html = data
             else:

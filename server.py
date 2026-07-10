@@ -723,7 +723,8 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 self.wfile.write(b"data: [DONE]\n\n")
                 self.wfile.flush()
         except Exception as err:
-            error_chunk = json.dumps({"error": str(err)})
+            print(f"Error in Anthropic proxy: {err}")
+            error_chunk = json.dumps({"error": "An internal error occurred while processing your request."})
             self.wfile.write(f"data: {error_chunk}\n\n".encode())
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
@@ -766,7 +767,8 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
         except Exception as err:
-            error_chunk = json.dumps({"error": str(err)})
+            print(f"Error in OpenAI proxy: {err}")
+            error_chunk = json.dumps({"error": "An internal error occurred while processing your request."})
             self.wfile.write(f"data: {error_chunk}\n\n".encode())
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()

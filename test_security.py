@@ -25,6 +25,8 @@ class TestSecurityFix(unittest.TestCase):
                 time.sleep(0.5)
         else:
             cls.tearDownClass()
+            print(cls.server_process.stderr.read())
+            print(cls.server_process.stdout.read())
             raise RuntimeError("Server failed to start within timeout")
 
     @classmethod

@@ -7,6 +7,8 @@ import sqlite3
 import concurrent.futures
 import urllib.request
 import urllib.error
+import logging
+
 
 def _load_dotenv(path=".env"):
     """Load key=value pairs from .env into os.environ (no-op if file absent)."""
@@ -21,6 +23,7 @@ def _load_dotenv(path=".env"):
     except FileNotFoundError:
         pass
 
+
 _load_dotenv()
 
 try:
@@ -31,7 +34,7 @@ except ImportError:
 DB_PATH = os.environ.get("DB_PATH", "prompt_studio.db")
 PORT = int(os.environ.get("PORT", 8000))
 MAX_BODY_BYTES = 10 * 1024 * 1024  # 10 MB
-SCHEMA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'schema.sql')
+SCHEMA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "schema.sql")
 
 
 def migrate_db(conn):
@@ -43,7 +46,7 @@ def migrate_db(conn):
     row = cursor.fetchone()
     if not row:
         return  # table doesn't exist yet; schema.sql will create it
-    if 'PRIMARY KEY (id, version)' in row[0]:
+    if "PRIMARY KEY (id, version)" in row[0]:
         return  # already migrated
     # Recreate table with composite PK
     conn.execute("BEGIN")
@@ -94,14 +97,16 @@ def migrate_sessions(conn):
     """Migrate sessions table from the old Flask schema (data TEXT) to the current schema
     (panes TEXT + vault_config TEXT).  Preserves existing session data."""
     cursor = conn.cursor()
-    cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='sessions'")
+    cursor.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='sessions'"
+    )
     row = cursor.fetchone()
     if not row:
         return
     sql = row[0]
-    if 'vault_config' in sql:
+    if "vault_config" in sql:
         return  # already on current schema
-    if 'data TEXT' not in sql and 'data' not in sql:
+    if "data TEXT" not in sql and "data" not in sql:
         return  # unknown schema — leave it alone
 
     # Read all existing sessions before dropping the table
@@ -124,25 +129,30 @@ def migrate_sessions(conn):
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_sessions_created_at ON sessions (created_at DESC)"
         )
+
         def iter_values():
             for row in old_rows:
                 d = dict(zip(col_names, row))
-                row_id   = str(d.get('id', ''))
-                name     = d.get('name', 'Untitled')
-                created  = str(d.get('created_at') or d.get('createdAt') or '')
-                updated  = str(d.get('updated_at') or d.get('updatedAt') or created)
+                row_id = str(d.get("id", ""))
+                name = d.get("name", "Untitled")
+                created = str(d.get("created_at") or d.get("createdAt") or "")
+                updated = str(d.get("updated_at") or d.get("updatedAt") or created)
                 # Old schema stored everything in a 'data' JSON blob
-                raw_data = d.get('data') or d.get('panes') or '[]'
+                raw_data = d.get("data") or d.get("panes") or "[]"
                 try:
-                    parsed = json.loads(raw_data) if isinstance(raw_data, str) else raw_data
+                    parsed = (
+                        json.loads(raw_data) if isinstance(raw_data, str) else raw_data
+                    )
                 except Exception:
                     parsed = []
                 try:
                     if isinstance(parsed, dict):
-                        vault_cfg = json.dumps(parsed.get('vaultConfig') or parsed.get('vault') or {})
-                        panes_val = json.dumps(parsed.get('panes', []))
+                        vault_cfg = json.dumps(
+                            parsed.get("vaultConfig") or parsed.get("vault") or {}
+                        )
+                        panes_val = json.dumps(parsed.get("panes", []))
                     else:
-                        vault_cfg = '{}'
+                        vault_cfg = "{}"
                         panes_val = json.dumps(parsed)
                 except Exception:
                     continue
@@ -152,7 +162,7 @@ def migrate_sessions(conn):
 
         conn.executemany(
             "INSERT OR IGNORE INTO sessions (id, name, created_at, updated_at, panes, vault_config) VALUES (?,?,?,?,?,?)",
-            iter_values()
+            iter_values(),
         )
         conn.commit()
     except Exception:
@@ -196,15 +206,25 @@ def _seed_prompts_from_index(conn):
     for p in prompts:
         fpath = p.get("file")
         body = file_bodies.get(fpath, "")
-        params.append((
-            p.get("id"), p.get("version"), p.get("status"),
-            p.get("tier"), owner, body, p.get("use_case"),
-            p.get("cost_per_run_usd"), p.get("tokens_prompt_body"),
-            p.get("default_model"), p.get("eval_status"),
-            p.get("file"), p.get("notes"),
-            json.dumps(p.get("composes", [])),
-            json.dumps(p.get("tested_on", [])),
-        ))
+        params.append(
+            (
+                p.get("id"),
+                p.get("version"),
+                p.get("status"),
+                p.get("tier"),
+                owner,
+                body,
+                p.get("use_case"),
+                p.get("cost_per_run_usd"),
+                p.get("tokens_prompt_body"),
+                p.get("default_model"),
+                p.get("eval_status"),
+                p.get("file"),
+                p.get("notes"),
+                json.dumps(p.get("composes", [])),
+                json.dumps(p.get("tested_on", [])),
+            )
+        )
 
     if params:
         try:
@@ -217,7 +237,7 @@ def _seed_prompts_from_index(conn):
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,
                    strftime('%Y-%m-%dT%H:%M:%SZ','now'),
                    strftime('%Y-%m-%dT%H:%M:%SZ','now'))""",
-                params
+                params,
             )
             conn.commit()
         except Exception:
@@ -237,20 +257,27 @@ def init_db():
     finally:
         conn.close()
 
+
 class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
     _anthropic_clients = {}
 
     BASE_DIR = os.path.abspath(os.path.dirname(__file__))
     ALLOWED_SUBDIRS = (
-        os.path.abspath(os.path.join(BASE_DIR, 'sandbox')),
-        os.path.abspath(os.path.join(BASE_DIR, 'registry'))
+        os.path.abspath(os.path.join(BASE_DIR, "sandbox")),
+        os.path.abspath(os.path.join(BASE_DIR, "registry")),
     )
     # Tuples of prefixes must end with os.sep so `/registry_secret` doesn't match `/registry`
     ALLOWED_PREFIXES = tuple(d + os.sep for d in ALLOWED_SUBDIRS)
+
     def end_headers(self):
-        self.send_header('Access-Control-Allow-Origin', os.environ.get('ALLOWED_ORIGIN', 'http://localhost:7777'))
-        self.send_header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.send_header(
+            "Access-Control-Allow-Origin",
+            os.environ.get("ALLOWED_ORIGIN", "http://localhost:7777"),
+        )
+        self.send_header(
+            "Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS"
+        )
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
         super().end_headers()
 
     def do_OPTIONS(self):
@@ -264,40 +291,42 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
 
     def send_json(self, data, status=200):
         self.send_response(status)
-        self.send_header('Content-Type', 'application/json')
+        self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(json.dumps(data).encode('utf-8'))
+        self.wfile.write(json.dumps(data).encode("utf-8"))
 
     def send_raw_json(self, json_string, status=200):
         self.send_response(status)
-        self.send_header('Content-Type', 'application/json')
+        self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(json_string.encode('utf-8'))
+        self.wfile.write(json_string.encode("utf-8"))
 
     def do_GET(self):
-        if self.path == '/api/sessions':
+        if self.path == "/api/sessions":
             self.handle_get_sessions()
-        elif self.path == '/api/prompts':
+        elif self.path == "/api/prompts":
             self.handle_get_prompts()
-        elif self.path == '/api/registry':
-            self.serve_file('registry/INDEX.json', 'application/json')
-        elif self.path.startswith('/registry-asset/'):
-            rel = self.path[len('/registry-asset/'):]
-            if '..' in rel or rel.startswith('/'):
+        elif self.path == "/api/registry":
+            self.serve_file("registry/INDEX.json", "application/json")
+        elif self.path.startswith("/registry-asset/"):
+            rel = self.path[len("/registry-asset/") :]
+            if ".." in rel or rel.startswith("/"):
                 self.send_error(400)
                 return
-            self.serve_file('registry/' + rel)
-        elif self.path in ('/', '/sandbox', '/sandbox/'):
+            self.serve_file("registry/" + rel)
+        elif self.path in ("/", "/sandbox", "/sandbox/"):
             self.serve_sandbox_index()
-        elif self.path in ('/registry', '/registry/'):
-            self.serve_file('registry/interface/registry_widget.html', 'text/html')
-        elif self.path.startswith('/js/'):
+        elif self.path in ("/registry", "/registry/"):
+            self.serve_file("registry/interface/registry_widget.html", "text/html")
+        elif self.path.startswith("/js/"):
             # Only serve files from sandbox/js/
-            js_path = self.path.removeprefix('/js/').lstrip('/')
+            js_path = self.path.removeprefix("/js/").lstrip("/")
             if not js_path:
                 self.send_error(404)
                 return
-            self.serve_file(os.path.join('sandbox', 'js', js_path), 'application/javascript')
+            self.serve_file(
+                os.path.join("sandbox", "js", js_path), "application/javascript"
+            )
         else:
             self.send_error(404)
 
@@ -310,19 +339,23 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         """Serve index.html with LM_STUDIO_URL injected from environment."""
         try:
             if self.__class__._cached_index_html is None:
-                with open('sandbox/index.html', 'rb') as f:
+                with open("sandbox/index.html", "rb") as f:
                     data = f.read()
-                lm_url = os.environ.get('LM_STUDIO_URL', '')
+                lm_url = os.environ.get("LM_STUDIO_URL", "")
                 if lm_url:
-                    inject = f'<script>window.LM_STUDIO_URL="{lm_url}";</script>'.encode()
-                    data = data.replace(b'<script type="module"', inject + b'<script type="module"', 1)
+                    inject = (
+                        f'<script>window.LM_STUDIO_URL="{lm_url}";</script>'.encode()
+                    )
+                    data = data.replace(
+                        b'<script type="module"', inject + b'<script type="module"', 1
+                    )
                 self.__class__._cached_index_html = data
             else:
                 data = self.__class__._cached_index_html
 
             self.send_response(200)
-            self.send_header('Content-Type', 'text/html')
-            self.send_header('Content-Length', str(len(data)))
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
         except FileNotFoundError:
@@ -333,62 +366,69 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             # Secure path resolution: ensure the path stays within allowed subdirectories
             requested_path = os.path.abspath(os.path.join(self.BASE_DIR, path))
 
-            if not (requested_path in self.ALLOWED_SUBDIRS or requested_path.startswith(self.ALLOWED_PREFIXES)):
+            if not (
+                requested_path in self.ALLOWED_SUBDIRS
+                or requested_path.startswith(self.ALLOWED_PREFIXES)
+            ):
                 self.send_error(404, f"File not found: {path}")
                 return
 
-            with open(requested_path, 'rb') as f:
+            with open(requested_path, "rb") as f:
                 data = f.read()
-            mime = content_type or mimetypes.guess_type(requested_path)[0] or 'application/octet-stream'
+            mime = (
+                content_type
+                or mimetypes.guess_type(requested_path)[0]
+                or "application/octet-stream"
+            )
             self.send_response(200)
-            self.send_header('Content-Type', mime)
-            self.send_header('Content-Length', str(len(data)))
+            self.send_header("Content-Type", mime)
+            self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
         except (FileNotFoundError, IsADirectoryError, PermissionError):
             self.send_error(404, f"File not found: {path}")
 
     def do_POST(self):
-        if self.path == '/api/sessions':
+        if self.path == "/api/sessions":
             self.handle_post_sessions()
-        elif self.path.startswith('/api/prompts/'):
-            parts = self.path.removeprefix('/api/prompts/').split('/')
-            if len(parts) == 2 and parts[1] == 'draft':
+        elif self.path.startswith("/api/prompts/"):
+            parts = self.path.removeprefix("/api/prompts/").split("/")
+            if len(parts) == 2 and parts[1] == "draft":
                 self.handle_post_prompt_draft(parts[0])
-            elif len(parts) == 3 and parts[2] == 'validate':
+            elif len(parts) == 3 and parts[2] == "validate":
                 self.handle_post_prompt_validate(parts[0], parts[1])
             else:
                 self.send_error(404)
-        elif self.path == '/api/prompts':
+        elif self.path == "/api/prompts":
             self.handle_post_prompts()
-        elif self.path == '/api/chat':
+        elif self.path == "/api/chat":
             self.handle_post_chat()
         else:
             self.send_error(404)
 
     def do_PUT(self):
-        if self.path.startswith('/api/sessions/'):
-            session_id = self.path.split('/')[-1]
+        if self.path.startswith("/api/sessions/"):
+            session_id = self.path.split("/")[-1]
             self.handle_put_session(session_id)
-        elif self.path.startswith('/api/prompts/'):
-            prompt_id = self.path.split('/')[-1]
+        elif self.path.startswith("/api/prompts/"):
+            prompt_id = self.path.split("/")[-1]
             self.handle_put_prompt(prompt_id)
         else:
             self.send_error(404)
 
     def do_DELETE(self):
-        if self.path.startswith('/api/sessions/'):
-            session_id = self.path.split('/')[-1]
+        if self.path.startswith("/api/sessions/"):
+            session_id = self.path.split("/")[-1]
             self.handle_delete_session(session_id)
-        elif self.path.startswith('/api/prompts/'):
-            prompt_id = self.path.split('/')[-1]
+        elif self.path.startswith("/api/prompts/"):
+            prompt_id = self.path.split("/")[-1]
             self.handle_delete_prompt(prompt_id)
         else:
             self.send_error(404)
 
     def read_json_body(self):
         try:
-            content_length = int(self.headers.get('Content-Length', 0))
+            content_length = int(self.headers.get("Content-Length", 0))
         except ValueError:
             return None
         if content_length > MAX_BODY_BYTES:
@@ -396,7 +436,7 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             return None
         body = self.rfile.read(content_length)
         try:
-            return json.loads(body.decode('utf-8'))
+            return json.loads(body.decode("utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError):
             self.send_error(400, "Invalid JSON")
             return None
@@ -437,7 +477,14 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
 
             cursor.execute(
                 "INSERT INTO sessions (id, name, created_at, updated_at, panes, vault_config) VALUES (?, ?, ?, ?, ?, ?)",
-                (data["id"], data["name"], data["createdAt"], data["updatedAt"], json.dumps(data["panes"]), json.dumps(data["vaultConfig"]))
+                (
+                    data["id"],
+                    data["name"],
+                    data["createdAt"],
+                    data["updatedAt"],
+                    json.dumps(data["panes"]),
+                    json.dumps(data["vaultConfig"]),
+                ),
             )
             conn.commit()
         except sqlite3.IntegrityError:
@@ -466,7 +513,7 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         data = self.read_json_body()
         if data is None:
             return
-        version = data.get('version')
+        version = data.get("version")
         if version is None:
             self.send_error(400, "version required")
             return
@@ -481,14 +528,22 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                    updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
                    WHERE id=? AND version=?""",
                 (
-                    data.get('status'), data.get('tier'), data.get('owner'),
-                    data.get('body'), data.get('use_case'),
-                    data.get('cost_per_run_usd'), data.get('tokens_prompt_body'),
-                    data.get('default_model'), data.get('eval_status'),
-                    data.get('file'), data.get('notes'),
-                    data.get('composes'), data.get('tested_on'),
-                    prompt_id, version,
-                )
+                    data.get("status"),
+                    data.get("tier"),
+                    data.get("owner"),
+                    data.get("body"),
+                    data.get("use_case"),
+                    data.get("cost_per_run_usd"),
+                    data.get("tokens_prompt_body"),
+                    data.get("default_model"),
+                    data.get("eval_status"),
+                    data.get("file"),
+                    data.get("notes"),
+                    data.get("composes"),
+                    data.get("tested_on"),
+                    prompt_id,
+                    version,
+                ),
             )
             conn.commit()
             if cursor.rowcount == 0:
@@ -567,14 +622,24 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                     created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
-                    data.get("id"), data.get("version"), data.get("status"), data.get("tier"),
-                    data.get("owner"), data.get("body"), data.get("useCase"),
-                    data.get("costPerRunUsd"), data.get("tokensPromptBody"),
-                    data.get("defaultModel"), data.get("evalStatus"), data.get("file"),
-                    data.get("notes"), json.dumps(data.get("composes", [])),
-                    json.dumps(data.get("testedOn", [])), data.get("createdAt"),
-                    data.get("updatedAt")
-                )
+                    data.get("id"),
+                    data.get("version"),
+                    data.get("status"),
+                    data.get("tier"),
+                    data.get("owner"),
+                    data.get("body"),
+                    data.get("useCase"),
+                    data.get("costPerRunUsd"),
+                    data.get("tokensPromptBody"),
+                    data.get("defaultModel"),
+                    data.get("evalStatus"),
+                    data.get("file"),
+                    data.get("notes"),
+                    json.dumps(data.get("composes", [])),
+                    json.dumps(data.get("testedOn", [])),
+                    data.get("createdAt"),
+                    data.get("updatedAt"),
+                ),
             )
             conn.commit()
         except sqlite3.IntegrityError:
@@ -588,7 +653,7 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         data = self.read_json_body()
         if data is None:
             return
-        body = data.get('body', '')
+        body = data.get("body", "")
         conn = self.get_db()
         try:
             cursor = conn.cursor()
@@ -602,11 +667,11 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                        INSTR(version,'.')+1 + INSTR(SUBSTR(version, INSTR(version,'.')+1), '.'))
                        AS INTEGER) DESC
                    LIMIT 1""",
-                (prompt_id,)
+                (prompt_id,),
             )
             rows = cursor.fetchall()
             if rows:
-                parts = rows[0][0].split('.')
+                parts = rows[0][0].split(".")
                 new_version = f"{parts[0]}.{int(parts[1]) + 1}.0"
             else:
                 new_version = "1.0.0"
@@ -619,7 +684,7 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                    ON CONFLICT(id, version) DO UPDATE SET
                    body=excluded.body,
                    updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')""",
-                (prompt_id, new_version, body)
+                (prompt_id, new_version, body),
             )
             conn.commit()
         except sqlite3.IntegrityError:
@@ -637,7 +702,7 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 """UPDATE prompts SET status='production', eval_status='validated',
                    updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
                    WHERE id=? AND version=?""",
-                (prompt_id, version)
+                (prompt_id, version),
             )
             conn.commit()
             if cursor.rowcount == 0:
@@ -649,9 +714,12 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
 
     # OpenAI-compatible provider config: provider → (base_url, env_var)
     _OPENAI_COMPAT = {
-        "openai": ("https://api.openai.com/v1/chat/completions",                                      "OPENAI_API_KEY"),
-        "xai":    ("https://api.x.ai/v1/chat/completions",                                            "XAI_API_KEY"),
-        "google": ("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",        "GEMINI_API_KEY"),
+        "openai": ("https://api.openai.com/v1/chat/completions", "OPENAI_API_KEY"),
+        "xai": ("https://api.x.ai/v1/chat/completions", "XAI_API_KEY"),
+        "google": (
+            "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+            "GEMINI_API_KEY",
+        ),
     }
 
     def handle_post_chat(self):
@@ -659,27 +727,29 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         if data is None:
             return
 
-        model_id = data.get('model', '')
+        model_id = data.get("model", "")
         if not model_id:
             self.send_json({"error": "model required"}, status=400)
             return
 
-        provider = data.get('provider', 'anthropic')
+        provider = data.get("provider", "anthropic")
 
-        if provider == 'anthropic':
-            self._stream_anthropic(model_id, data.get('messages', []))
+        if provider == "anthropic":
+            self._stream_anthropic(model_id, data.get("messages", []))
         elif provider in self._OPENAI_COMPAT:
             endpoint_url, env_var = self._OPENAI_COMPAT[provider]
             api_key = os.environ.get(env_var)
             if not api_key:
                 self.send_json({"error": f"{env_var} not configured"}, status=503)
                 return
-            self._stream_openai_compat(endpoint_url, api_key, model_id, data.get('messages', []))
+            self._stream_openai_compat(
+                endpoint_url, api_key, model_id, data.get("messages", [])
+            )
         else:
             self.send_json({"error": f"Unknown provider: {provider}"}, status=400)
 
     def _stream_anthropic(self, model_id, messages):
-        api_key = os.environ.get('ANTHROPIC_API_KEY')
+        api_key = os.environ.get("ANTHROPIC_API_KEY")
         if not api_key:
             self.send_json({"error": "ANTHROPIC_API_KEY not configured"}, status=503)
             return
@@ -687,17 +757,17 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json({"error": "anthropic package not installed"}, status=503)
             return
 
-        system_msgs = [m for m in messages if m.get('role') == 'system']
-        user_msgs   = [m for m in messages if m.get('role') != 'system']
-        system = "\n\n".join(m['content'] for m in system_msgs) if system_msgs else ''
+        system_msgs = [m for m in messages if m.get("role") == "system"]
+        user_msgs = [m for m in messages if m.get("role") != "system"]
+        system = "\n\n".join(m["content"] for m in system_msgs) if system_msgs else ""
 
         if api_key not in self._anthropic_clients:
             self._anthropic_clients[api_key] = anthropic.Anthropic(api_key=api_key)
         client = self._anthropic_clients[api_key]
 
         self.send_response(200)
-        self.send_header('Content-Type', 'text/event-stream')
-        self.send_header('Cache-Control', 'no-cache')
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
         self.end_headers()
 
         try:
@@ -712,18 +782,21 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                     self.wfile.write(f"data: {chunk}\n\n".encode())
                     self.wfile.flush()
                 msg = stream.get_final_message()
-                usage_chunk = json.dumps({
-                    "choices": [{"delta": {}}],
-                    "usage": {
-                        "prompt_tokens": msg.usage.input_tokens,
-                        "completion_tokens": msg.usage.output_tokens,
+                usage_chunk = json.dumps(
+                    {
+                        "choices": [{"delta": {}}],
+                        "usage": {
+                            "prompt_tokens": msg.usage.input_tokens,
+                            "completion_tokens": msg.usage.output_tokens,
+                        },
                     }
-                })
+                )
                 self.wfile.write(f"data: {usage_chunk}\n\n".encode())
                 self.wfile.write(b"data: [DONE]\n\n")
                 self.wfile.flush()
         except Exception as err:
-            error_chunk = json.dumps({"error": str(err)})
+            logging.error("Anthropic stream error", exc_info=True)
+            error_chunk = json.dumps({"error": "An internal error occurred."})
             self.wfile.write(f"data: {error_chunk}\n\n".encode())
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
@@ -731,20 +804,22 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
     def _stream_openai_compat(self, endpoint_url, api_key, model_id, messages):
         """Proxy an OpenAI-compatible streaming request. Response is already OpenAI SSE
         format so it can be piped directly to the client without translation."""
-        payload = json.dumps({
-            "model":      model_id,
-            "messages":   messages,
-            "stream":     True,
-            "max_tokens": 8096,
-        }).encode()
+        payload = json.dumps(
+            {
+                "model": model_id,
+                "messages": messages,
+                "stream": True,
+                "max_tokens": 8096,
+            }
+        ).encode()
 
-        req = urllib.request.Request(endpoint_url, data=payload, method='POST')
-        req.add_header('Content-Type',  'application/json')
-        req.add_header('Authorization', f'Bearer {api_key}')
+        req = urllib.request.Request(endpoint_url, data=payload, method="POST")
+        req.add_header("Content-Type", "application/json")
+        req.add_header("Authorization", f"Bearer {api_key}")
 
         self.send_response(200)
-        self.send_header('Content-Type', 'text/event-stream')
-        self.send_header('Cache-Control', 'no-cache')
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
         self.end_headers()
 
         try:
@@ -756,9 +831,9 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                     self.wfile.write(chunk)
                     self.wfile.flush()
         except urllib.error.HTTPError as err:
-            body = err.read().decode('utf-8', errors='replace')
+            body = err.read().decode("utf-8", errors="replace")
             try:
-                msg = json.loads(body).get('error', {}).get('message', body)
+                msg = json.loads(body).get("error", {}).get("message", body)
             except Exception:
                 msg = body[:200]
             error_chunk = json.dumps({"error": msg})
@@ -766,7 +841,8 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
         except Exception as err:
-            error_chunk = json.dumps({"error": str(err)})
+            logging.error("OpenAI-compat stream error", exc_info=True)
+            error_chunk = json.dumps({"error": "An internal error occurred."})
             self.wfile.write(f"data: {error_chunk}\n\n".encode())
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
@@ -804,7 +880,8 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             conn.close()
         self.send_raw_json(result if result else "[]")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     init_db()
     with socketserver.TCPServer(("", PORT), PromptStudioHandler) as httpd:
         print(f"Serving at port {PORT}")

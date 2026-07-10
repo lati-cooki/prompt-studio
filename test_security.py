@@ -7,13 +7,14 @@ import os
 import signal
 import socket
 
+
 class TestSecurityFix(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         # Start the server
-        cls.server_process = subprocess.Popen(['python3', 'server.py'],
-                                             stdout=subprocess.PIPE,
-                                             stderr=subprocess.PIPE)
+        cls.server_process = subprocess.Popen(
+            ["python3", "server.py"], stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
         # Wait for the server to start by polling the port
         timeout = 10
         start_time = time.time()
@@ -29,57 +30,102 @@ class TestSecurityFix(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        if hasattr(cls, 'server_process'):
+        if hasattr(cls, "server_process"):
             os.kill(cls.server_process.pid, signal.SIGTERM)
             cls.server_process.wait()
 
     def test_static_files_not_accessible_get(self):
         # Test that sensitive files are not accessible via GET
-        files = ['server.py', 'prompt_studio.db', 'schema.sql', 'README.md']
+        files = ["server.py", "prompt_studio.db", "schema.sql", "README.md"]
         for file in files:
-            url = f'http://localhost:8000/{file}'
-            with self.subTest(file=file, method='GET'):
+            url = f"http://localhost:8000/{file}"
+            with self.subTest(file=file, method="GET"):
                 try:
                     urllib.request.urlopen(url)
                     self.fail(f"File {file} should not be accessible via GET")
                 except urllib.error.HTTPError as e:
-                    self.assertEqual(e.code, 404, f"File {file} should return 404 for GET, but got {e.code}")
+                    self.assertEqual(
+                        e.code,
+                        404,
+                        f"File {file} should return 404 for GET, but got {e.code}",
+                    )
 
     def test_static_files_not_accessible_head(self):
         # Test that sensitive files are not accessible via HEAD
-        files = ['server.py', 'prompt_studio.db', 'schema.sql', 'README.md']
+        files = ["server.py", "prompt_studio.db", "schema.sql", "README.md"]
         for file in files:
-            url = f'http://localhost:8000/{file}'
-            with self.subTest(file=file, method='HEAD'):
-                req = urllib.request.Request(url, method='HEAD')
+            url = f"http://localhost:8000/{file}"
+            with self.subTest(file=file, method="HEAD"):
+                req = urllib.request.Request(url, method="HEAD")
                 try:
                     urllib.request.urlopen(req)
                     self.fail(f"File {file} should not be accessible via HEAD")
                 except urllib.error.HTTPError as e:
-                    self.assertEqual(e.code, 404, f"File {file} should return 404 for HEAD, but got {e.code}")
+                    self.assertEqual(
+                        e.code,
+                        404,
+                        f"File {file} should return 404 for HEAD, but got {e.code}",
+                    )
 
     def test_api_endpoints_accessible(self):
         # Test that API endpoints are still accessible
-        endpoints = ['/api/sessions', '/api/prompts']
+        endpoints = ["/api/sessions", "/api/prompts"]
         for endpoint in endpoints:
-            url = f'http://localhost:8000{endpoint}'
+            url = f"http://localhost:8000{endpoint}"
             with self.subTest(endpoint=endpoint):
                 try:
                     response = urllib.request.urlopen(url)
-                    self.assertEqual(response.getcode(), 200, f"Endpoint {endpoint} should be accessible")
+                    self.assertEqual(
+                        response.getcode(),
+                        200,
+                        f"Endpoint {endpoint} should be accessible",
+                    )
                 except urllib.error.HTTPError as e:
-                    self.fail(f"Endpoint {endpoint} should be accessible, but got {e.code}")
+                    self.fail(
+                        f"Endpoint {endpoint} should be accessible, but got {e.code}"
+                    )
+
+    def test_cors_header_allowed(self):
+        # The TestSecurityFix class runs with the default environment (ALLOWED_ORIGIN='http://localhost:7777' is default)
+        url = "http://localhost:8000/api/prompts"
+        req = urllib.request.Request(url, method="OPTIONS")
+        req.add_header("Origin", "http://localhost:7777")
+        try:
+            response = urllib.request.urlopen(req)
+            self.assertEqual(
+                response.getheader("Access-Control-Allow-Origin"),
+                "http://localhost:7777",
+            )
+        except urllib.error.HTTPError as e:
+            self.fail(f"OPTIONS request failed: {e}")
+
+    def test_cors_header_disallowed(self):
+        url = "http://localhost:8000/api/prompts"
+        req = urllib.request.Request(url, method="OPTIONS")
+        req.add_header("Origin", "http://evil.com")
+        try:
+            response = urllib.request.urlopen(req)
+            # Default fallback when unmatched
+            self.assertEqual(
+                response.getheader("Access-Control-Allow-Origin"),
+                "http://localhost:7777",
+            )
+        except urllib.error.HTTPError as e:
+            self.fail(f"OPTIONS request failed: {e}")
+
 
 class TestCors(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         env = os.environ.copy()
-        env['ALLOWED_ORIGIN'] = 'http://localhost:7777'
-        env['PORT'] = '8001' # Run on a different port to avoid conflicts
-        cls.server_process = subprocess.Popen(['python3', 'server.py'],
-                                             stdout=subprocess.PIPE,
-                                             stderr=subprocess.PIPE,
-                                             env=env)
+        env["ALLOWED_ORIGIN"] = "http://localhost:7777, http://app.example.com"
+        env["PORT"] = "8001"  # Run on a different port to avoid conflicts
+        cls.server_process = subprocess.Popen(
+            ["python3", "server.py"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+        )
         # Wait for the server to start by polling the port
         timeout = 10
         start_time = time.time()
@@ -95,18 +141,36 @@ class TestCors(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        if hasattr(cls, 'server_process'):
+        if hasattr(cls, "server_process"):
             os.kill(cls.server_process.pid, signal.SIGTERM)
             cls.server_process.wait()
 
     def test_cors_header(self):
-        url = 'http://localhost:8001/api/prompts'
-        req = urllib.request.Request(url, method='OPTIONS')
+        url = "http://localhost:8001/api/prompts"
+        req = urllib.request.Request(url, method="OPTIONS")
+        req.add_header("Origin", "http://app.example.com")
         try:
             response = urllib.request.urlopen(req)
-            self.assertEqual(response.getheader('Access-Control-Allow-Origin'), 'http://localhost:7777')
+            self.assertEqual(
+                response.getheader("Access-Control-Allow-Origin"),
+                "http://app.example.com",
+            )
         except urllib.error.HTTPError as e:
             self.fail(f"OPTIONS request failed: {e}")
 
-if __name__ == '__main__':
+    def test_cors_header_unmatched_multiple(self):
+        url = "http://localhost:8001/api/prompts"
+        req = urllib.request.Request(url, method="OPTIONS")
+        req.add_header("Origin", "http://evil.com")
+        try:
+            response = urllib.request.urlopen(req)
+            self.assertEqual(
+                response.getheader("Access-Control-Allow-Origin"),
+                "http://localhost:7777",
+            )
+        except urllib.error.HTTPError as e:
+            self.fail(f"OPTIONS request failed: {e}")
+
+
+if __name__ == "__main__":
     unittest.main()

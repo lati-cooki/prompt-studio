@@ -1,4 +1,4 @@
-export function createRegistryPanel({ container, onSaveDraft, onValidate, onViewRegistry, onSessionClick }) {
+export function createRegistryPanel({ container, onSaveDraft, onViewRegistry, onSessionClick }) {
   const panel = document.createElement("aside");
   panel.className = "registry-panel";
 
@@ -27,11 +27,6 @@ export function createRegistryPanel({ container, onSaveDraft, onValidate, onView
   draftBtn.textContent = "Save as next draft";
   draftBtn.addEventListener("click", () => onSaveDraft && onSaveDraft());
 
-  const validateBtn = document.createElement("button");
-  validateBtn.className   = "rp-action promote";
-  validateBtn.textContent = "Mark eval: validated ✓";
-  validateBtn.addEventListener("click", () => onValidate && onValidate());
-
   const viewBtn = document.createElement("button");
   viewBtn.className   = "rp-action open-reg";
   viewBtn.textContent = "View full registry →";
@@ -47,7 +42,7 @@ export function createRegistryPanel({ container, onSaveDraft, onValidate, onView
   const sessionsEl = document.createElement("div");
   sessionsEl.className = "rp-sessions";
 
-  panel.append(title, idEl, metaEl, divider1, statsEl, divider2, draftBtn, validateBtn, viewBtn, divider3, sessionsTitle, sessionsEl);
+  panel.append(title, idEl, metaEl, divider1, statsEl, divider2, draftBtn, viewBtn, divider3, sessionsTitle, sessionsEl);
   container.appendChild(panel);
 
   function stat(label, value) {
@@ -77,7 +72,6 @@ export function createRegistryPanel({ container, onSaveDraft, onValidate, onView
         metaEl.textContent   = "";
         statsEl.innerHTML    = "";
         draftBtn.disabled    = true;
-        validateBtn.disabled = true;
         sessionsEl.innerHTML = "";
         return;
       }
@@ -90,7 +84,6 @@ export function createRegistryPanel({ container, onSaveDraft, onValidate, onView
         stat("cost/run",    p.cost_per_run_usd != null ? `$${p.cost_per_run_usd.toFixed(4)}` : "—"),
       );
       draftBtn.disabled    = false;
-      validateBtn.disabled = (p.eval_status === "validated");
     },
 
     setSessions(sessions, activePromptId) {

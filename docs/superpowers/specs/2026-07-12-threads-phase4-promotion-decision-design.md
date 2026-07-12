@@ -80,7 +80,7 @@ objection is resolved (responded/upheld) or the promotion is aborted.
 | `POST /api/promotions/<pid>/abort` | State `aborted`, status untouched, seal an abort record. |
 | `POST /api/prompts/<id>/demote/<version>` | Body: `{reason}`. Sets `status='deprecated'` and seals a superseding claim referencing the promotion's `thread_slug` (if any). |
 
-**Guard:** `handle_post_prompt_validate` and `handle_put_prompt` reject direct transitions **to** `status='production'` with 409 + a body pointing at the promote flow. (Other status edits stay unrestricted.) The `validate` route is kept but returns the 409 — existing callers get a self-explaining error, not a silent 404.
+**Guard:** `handle_post_prompt_validate`, `handle_put_prompt`, and `POST /api/prompts` (`handle_post_prompts`, the create route) all reject direct transitions **to** `status='production'` with 409 + a body pointing at the promote flow. (Other status edits stay unrestricted.) The `validate` route is kept but returns the 409 — existing callers get a self-explaining error, not a silent 404.
 
 ## Evidence (executable, pinned)
 
@@ -93,7 +93,7 @@ objection is resolved (responded/upheld) or the promotion is aborted.
 
 On terminal state (`closed`/`waived`/`aborted`), the server seals via the existing `seal.py` orchestrator/custodial path (validate-first atomicity, custodial HTTP writes through the :8110 sidecar, temp-dir ClisTa authoring, `.seal_author_id` author):
 
-- **Thread:** one per promotion event, slug like `promote-<prompt_id>-<version>` (abort: `promote-…-aborted-<pid>`).
+- **Thread:** one per promotion event, slug like `promote-<prompt_id>-<version>` (abort: `promote-…-aborted-<pid>`). In practice `seal.py` derives the slug from the claim's `title` (`"Promote {id} v{version} to production"`), so a real slug looks like `promote-consensus-protocol-v1-1-0-to-production` — dots in the version become dashes, not a literal `<version>` placeholder.
 - **Evidence:** the pinned eval record (or the disclosed absence).
 - **Claim (the decision):** "`<prompt_id>` `<version>` promoted to production" (or aborted/deprecated), with FCP metadata in content: `{opened_at, closes_at, resolved_at, state, window_hours, fcp_waived, waive_reason?, objection_count, evidence_attached, content_hash?}`.
 - **Objections:** every `promotion_objections` row seals as an objection event with its resolution — objections survive the yes.

@@ -61,6 +61,15 @@ class TestBuildSealPayload(unittest.TestCase):
         p = psl.build_seal_payload(promo(state="aborted"), "aborted", "Troy")
         self.assertIn("NOT promoted", p["decision"])
 
+    def test_invalid_outcome_raises(self):
+        with self.assertRaises(ValueError):
+            psl.build_seal_payload(promo(), "not-a-real-outcome", "Troy")
+
+    def test_malformed_evidence_dict_does_not_crash(self):
+        # Missing source_file/content_hash used to hard-index and raise KeyError.
+        p = psl.build_seal_payload(promo(evidence={"unexpected": "shape"}), "promoted", "Troy")
+        self.assertEqual(len(p["evidence"]), 1)  # must not raise
+
 
 class TestDemotionPayload(unittest.TestCase):
     def test_validates_and_references_superseded_slug(self):

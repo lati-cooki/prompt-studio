@@ -628,6 +628,12 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         data = self.read_json_body()
         if data is None:
             return
+        if data.get("status") == "production":
+            self.send_json(
+                {"error": "status=production requires the promotion flow",
+                 "use": f"POST /api/prompts/{data.get('id')}/promote/{data.get('version')}"},
+                status=409)
+            return
         conn = self.get_db()
         try:
             cursor = conn.cursor()
@@ -712,16 +718,19 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         return (row["owner"] if row and row["owner"] else "Prompt Studio owner")
 
     def _seal_promotion(self, conn, promotion, outcome):
-        """Seal a terminal promotion; never raises — failure is recorded, not fatal."""
-        payload = promotion_seal.build_seal_payload(
-            promotion, outcome,
-            self._decided_by(conn, promotion["prompt_id"], promotion["version"]))
+        """Seal a terminal promotion; never raises — failure is recorded, not fatal.
+        Payload construction lives inside the try too: malformed stored evidence
+        (or anything else about this promotion) must record a seal_error, never
+        crash the request or leave the promotion permanently unresealable."""
         try:
+            payload = promotion_seal.build_seal_payload(
+                promotion, outcome,
+                self._decided_by(conn, promotion["prompt_id"], promotion["version"]))
             result = seal.seal_decision(payload)
             return promotion_store.mark_seal_result(
                 conn, promotion["id"], slug=result["slug"],
                 citation_hash=result.get("citationHash"))
-        except (seal.SealError, seal.SealValidationError) as e:
+        except Exception as e:
             msg = getattr(e, "message", None) or str(e)
             return promotion_store.mark_seal_result(conn, promotion["id"], error=msg)
 
@@ -729,13 +738,32 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         data = self.read_json_body()
         if data is None:
             return
-        evidence = data.get("evidence") or promotion_evidence.pin_evidence(prompt_id, version)
+        if "evidence" in data:
+            evidence = data["evidence"]
+            if evidence is not None and (
+                not isinstance(evidence, dict)
+                or "source_file" not in evidence
+                or "content_hash" not in evidence
+            ):
+                self.send_json(
+                    {"error": "evidence must include source_file and content_hash"},
+                    status=422)
+                return
+            # evidence is either a valid dict or an explicit None (disclosed absence
+            # — do NOT auto-pin in that case).
+        else:
+            evidence = promotion_evidence.pin_evidence(prompt_id, version)
+        try:
+            window_hours = float(data.get("window_hours", 24))
+        except (TypeError, ValueError):
+            self.send_json({"error": "window_hours must be numeric"}, status=422)
+            return
         conn = self.get_db()
         try:
             try:
                 p = promotion_store.open_promotion(
                     conn, prompt_id, version,
-                    window_hours=data.get("window_hours", 24), evidence=evidence)
+                    window_hours=window_hours, evidence=evidence)
             except promotion_store.PromotionError as e:
                 self._promotion_error(e)
                 return
@@ -829,6 +857,12 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                                (prompt_id, version)).fetchone()
             if row is None:
                 self.send_error(404, "Prompt not found")
+                return
+            if row["status"] != "production":
+                self.send_json(
+                    {"error": "only production prompts can be deprecated",
+                     "status": row["status"]},
+                    status=409)
                 return
             slug_row = conn.execute(
                 """SELECT thread_slug FROM promotions WHERE prompt_id=? AND version=?

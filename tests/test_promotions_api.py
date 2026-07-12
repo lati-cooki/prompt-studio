@@ -327,6 +327,153 @@ class TestDemote(PromotionApiTestCase):
         payload = mock_seal.call_args[0][0]
         self.assertIn("prod-slug", payload["decision"])
 
+    def test_demote_rejects_non_production_status(self):
+        # p1@1.0.0 is 'draft' (never promoted) — demoting a non-production
+        # prompt would notarize a false "was in production" claim.
+        with patch("seal.seal_decision") as mock_seal:
+            h = self._h()
+            h.path = "/api/prompts/p1/demote/1.0.0"
+            h._set_body(json.dumps({"reason": "changed my mind"}).encode())
+            h.do_POST()
+
+        self.assertEqual(h._last_status, 409)
+        body = h._json()
+        self.assertIn("only production prompts can be deprecated", body["error"])
+        self.assertEqual(body["status"], "draft")
+        mock_seal.assert_not_called()
+        row = self._prompt_row()
+        self.assertEqual(row["status"], "draft")  # unchanged
+
+
+class TestCreatePromptGuard(PromotionApiTestCase):
+    """POST /api/prompts (create) must not let a caller mint status='production'
+    with no FCP — same invariant handle_put_prompt already enforces."""
+
+    def test_create_rejects_direct_production_status(self):
+        h = self._h()
+        h.path = "/api/prompts"
+        body = {"id": "p2", "version": "1.0.0", "status": "production",
+                "createdAt": "2026-07-12T00:00:00Z", "updatedAt": "2026-07-12T00:00:00Z"}
+        h._set_body(json.dumps(body).encode())
+        h.do_POST()
+
+        self.assertEqual(h._last_status, 409)
+        row = self.anchor.execute(
+            "SELECT * FROM prompts WHERE id=? AND version=?", ("p2", "1.0.0")).fetchone()
+        self.assertIsNone(row)  # no row inserted
+
+    def test_create_allows_draft_status(self):
+        h = self._h()
+        h.path = "/api/prompts"
+        body = {"id": "p2", "version": "1.0.0", "status": "draft",
+                "createdAt": "2026-07-12T00:00:00Z", "updatedAt": "2026-07-12T00:00:00Z"}
+        h._set_body(json.dumps(body).encode())
+        h.do_POST()
+
+        self.assertEqual(h._last_status, 200)
+        row = self.anchor.execute(
+            "SELECT * FROM prompts WHERE id=? AND version=?", ("p2", "1.0.0")).fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row["status"], "draft")
+
+
+class TestPromoteWindowHoursGuard(PromotionApiTestCase):
+    def test_non_numeric_window_hours_is_422(self):
+        h = self._h()
+        h.path = "/api/prompts/p1/promote/1.0.0"
+        h._set_body(json.dumps({"window_hours": "abc"}).encode())
+        h.do_POST()
+        self.assertEqual(h._last_status, 422)
+
+
+class TestPromoteEvidenceValidation(PromotionApiTestCase):
+    def test_malformed_evidence_dict_is_422(self):
+        h = self._h()
+        h.path = "/api/prompts/p1/promote/1.0.0"
+        h._set_body(json.dumps({"evidence": {"random_field": "nope"}}).encode())
+        h.do_POST()
+
+        self.assertEqual(h._last_status, 422)
+        body = h._json()
+        self.assertIn("source_file", body["error"])
+        self.assertIn("content_hash", body["error"])
+        # nothing opened
+        self.assertEqual(
+            self.anchor.execute("SELECT COUNT(*) c FROM promotions").fetchone()["c"], 0)
+
+    def test_explicit_null_evidence_disclosed_and_not_autopinned(self):
+        with patch("promotion_evidence.pin_evidence") as mock_pin:
+            h = self._h()
+            h.path = "/api/prompts/p1/promote/1.0.0"
+            h._set_body(json.dumps({"evidence": None}).encode())
+            h.do_POST()
+
+        self.assertEqual(h._last_status, 200)
+        mock_pin.assert_not_called()  # explicit null means disclosed absence, not auto-pin
+        p = h._json()
+        self.assertIsNone(p["evidence"])
+
+    def test_absent_evidence_key_still_autopins(self):
+        fake = {"source_file": "eval_p1_v1_0_0_x_data.json", "model": "m",
+                "content_hash": "sha256:abc"}
+        with patch("promotion_evidence.pin_evidence", return_value=fake) as mock_pin:
+            h = self._h()
+            h.path = "/api/prompts/p1/promote/1.0.0"
+            h._set_body(json.dumps({}).encode())
+            h.do_POST()
+
+        self.assertEqual(h._last_status, 200)
+        mock_pin.assert_called_once()
+        p = h._json()
+        self.assertEqual(p["evidence"], fake)
+
+
+class TestSealNeverCrashesOnMalformedEvidence(PromotionApiTestCase):
+    """Reproduces the poisoning bug: a promotion with malformed stored evidence
+    used to crash the seal path forever (payload build lived outside the try,
+    caught only SealError/SealValidationError). Now the payload build is inside
+    the try and `except Exception` records the failure instead of propagating."""
+
+    def test_close_with_malformed_evidence_records_seal_error_then_reseal_recovers(self):
+        p = self._open_promotion(window_hours=0, evidence_patch_value=None)
+        pid = p["id"]
+
+        # Directly corrupt the stored evidence — bypasses promote-time validation,
+        # simulating stale/legacy data already sitting in the DB.
+        self.anchor.execute(
+            "UPDATE promotions SET evidence_json=? WHERE id=?",
+            (json.dumps({"totally": "unexpected shape"}), pid))
+        self.anchor.commit()
+
+        with patch("seal.seal_decision", side_effect=Exception("boom, downstream failure")):
+            h = self._h()
+            h.path = f"/api/promotions/{pid}/close"
+            h._set_body(b"")
+            h.do_POST()
+
+        self.assertEqual(h._last_status, 200)  # request must not crash
+        result = h._json()
+        self.assertEqual(result["sealed"], 0)
+        self.assertTrue(result["seal_error"])
+        row = self._prompt_row()
+        self.assertEqual(row["status"], "production")  # flip still survives seal failure
+
+        # "Fix" the evidence and reseal — must recover, not stay poisoned forever.
+        self.anchor.execute(
+            "UPDATE promotions SET evidence_json=NULL WHERE id=?", (pid,))
+        self.anchor.commit()
+
+        with patch("seal.seal_decision", return_value={"slug": "fixed-slug", "citationHash": "fh"}):
+            h2 = self._h()
+            h2.path = f"/api/promotions/{pid}/reseal"
+            h2._set_body(b"")
+            h2.do_POST()
+
+        self.assertEqual(h2._last_status, 200)
+        result2 = h2._json()
+        self.assertEqual(result2["sealed"], 1)
+        self.assertEqual(result2["thread_slug"], "fixed-slug")
+
 
 if __name__ == "__main__":
     unittest.main()

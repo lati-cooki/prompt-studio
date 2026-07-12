@@ -29,17 +29,17 @@ def _fcp_meta(promotion):
 
 def _evidence_items(promotion):
     ev = promotion["evidence"]
-    if ev is None:
+    if not isinstance(ev, dict):
         return [{
             "source": "none",
             "finding": ("evidence_attached: false — promotion proceeded without a "
                         "pinned eval run; absence disclosed. " + HONESTY_BOUNDARY),
         }]
     return [{
-        "source": f"eval:{ev['source_file']}",
+        "source": f"eval:{ev.get('source_file', 'unknown')}",
         "finding": (f"Pinned eval run — model={ev.get('model')}, "
                     f"tokens={json.dumps(ev.get('tokens'))}, run_at={ev.get('run_at')}, "
-                    f"content_hash={ev['content_hash']}. Re-run: {ev.get('rerun')}. "
+                    f"content_hash={ev.get('content_hash', 'unknown')}. Re-run: {ev.get('rerun')}. "
                     + HONESTY_BOUNDARY),
     }]
 
@@ -55,6 +55,8 @@ def _objection_texts(promotion):
 
 
 def build_seal_payload(promotion, outcome, decided_by):
+    if outcome not in ("promoted", "aborted"):
+        raise ValueError(f"invalid outcome: {outcome!r}")
     pid, ver = promotion["prompt_id"], promotion["version"]
     if outcome == "promoted":
         decision = f"{pid} {ver} promoted to production. FCP: "

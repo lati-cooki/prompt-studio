@@ -81,7 +81,6 @@ const $composer          = document.getElementById("composer");
 const registryPanel = createRegistryPanel({
   container:      $registryPanelMount,
   onSaveDraft:    handleSaveDraft,
-  onValidate:     handleValidate,
   onViewRegistry: () => switchTab("registry"),
   onSessionClick: (entry) => {
     activeSessionId = entry.id;
@@ -421,23 +420,6 @@ async function handleSaveDraft() {
     await loadRegistryPrompts();
   } catch (err) {
     $vaultStatus.textContent = `Draft save failed: ${err.message}`;
-    setTimeout(() => { $vaultStatus.textContent = ""; }, 5000);
-  }
-}
-
-async function handleValidate() {
-  if (!activePrompt) return;
-  const ok = confirm(`Mark ${activePrompt.id} v${activePrompt.version} as validated?`);
-  if (!ok) return;
-  try {
-    await api.validatePrompt(activePrompt.id, activePrompt.version);
-    $vaultStatus.textContent = "Marked as validated ✓";
-    setTimeout(() => { $vaultStatus.textContent = ""; }, 3000);
-    await loadRegistryPrompts();
-    const updated = registryPromptsMap.get(`${activePrompt.id}|${activePrompt.version}`);
-    if (updated) { activePrompt = updated; registryPanel.setPrompt(updated); }
-  } catch (err) {
-    $vaultStatus.textContent = `Validate failed: ${err.message}`;
     setTimeout(() => { $vaultStatus.textContent = ""; }, 5000);
   }
 }

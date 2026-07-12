@@ -260,6 +260,8 @@ select {
   color: var(--ink); border-color: var(--line);
   background: var(--paper-2);
 }
+.promo-badge { font-size: 11px; opacity: .8; }
+.promo-warn { color: #c0392b; }
 
 /* ── Footer ───────────────────────────────────────── */
 .doc-footer {
@@ -333,6 +335,19 @@ select {
 let data = [];
 let activeFilter = "all";
 let activeSort   = "name";
+let promotions = {};  // "id@version" -> newest promotion dict
+
+async function loadPromotions() {
+  try {
+    const res = await fetch("/api/promotions");
+    const list = await res.json();
+    promotions = {};
+    for (const p of list) {
+      const key = `${p.prompt_id}@${p.version}`;
+      if (!(key in promotions)) promotions[key] = p; // list is newest-first
+    }
+  } catch (e) { promotions = {}; }
+}
 
 function mapPrompt(p) {
   const cost = p.cost_per_run_usd;
@@ -375,6 +390,7 @@ async function loadRegistry() {
     data = (index.prompts || []).map(mapPrompt);
     document.getElementById("doc-footer").textContent =
       `Registry v${index.registry_version || "?"} · generated ${index.generated_at || "?"} · ${data.length} prompts`;
+    await loadPromotions();
     updateStats();
     render();
   } catch (err) {
@@ -395,6 +411,81 @@ function costStr(c) {
   if (c == null || c === "") return "—";
   const n = Number(c);
   return isFinite(n) ? "$" + n.toFixed(2) : "—";
+}
+
+function promoCell(d) {
+  const key = `${d.id}@${d.version}`;
+  const p = promotions[key];
+  if (p && p.state === "open") {
+    const blocked = p.unresolved_objections > 0;
+    const closesLabel = p.window_elapsed ? "window elapsed" : `closes ${esc(p.closes_at)}`;
+    return `
+      <span class="promo-badge">FCP open — ${closesLabel}${blocked ? ` · ${p.unresolved_objections} objection(s)` : ""}</span>
+      <button onclick="event.stopPropagation(); objectTo(${p.id})">Object</button>
+      ${blocked ? resolveButtons(p) : ""}
+      <button onclick="event.stopPropagation(); promoAction(${p.id}, 'close')">Close</button>
+      <button onclick="event.stopPropagation(); waive(${p.id})">Waive</button>
+      <button onclick="event.stopPropagation(); promoAction(${p.id}, 'abort')">Abort</button>`;
+  }
+  if (p && !p.sealed && p.state !== "open") {
+    return `<span class="promo-badge promo-warn">seal FAILED: ${esc(p.seal_error || "")}</span>
+      <button onclick="event.stopPropagation(); promoAction(${p.id}, 'reseal')">Retry seal</button>`;
+  }
+  if (d.status === "production") {
+    return `<button onclick="event.stopPropagation(); demote('${d.id}', '${d.version}')">Deprecate</button>`;
+  }
+  return `<button onclick="event.stopPropagation(); promote('${d.id}', '${d.version}')">Promote</button>`;
+}
+
+function resolveButtons(p) {
+  return p.objections.filter(o => !o.resolution).map(o =>
+    `<button onclick="event.stopPropagation(); resolveObjection(${p.id}, ${o.id})">Resolve #${o.id}</button>`
+  ).join("");
+}
+
+async function api(path, body) {
+  const res = await fetch(path, { method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}) });
+  const out = await res.json().catch(() => ({}));
+  if (!res.ok) { alert(`Error ${res.status}: ${out.error || "request failed"}${out.use ? `\nUse: ${out.use}` : ""}`); return null; }
+  return out;
+}
+
+async function promote(id, version) {
+  const hours = prompt("FCP window hours (objections can be filed until it closes):", "24");
+  if (hours === null) return;
+  const out = await api(`/api/prompts/${id}/promote/${version}`, { window_hours: parseFloat(hours) || 24 });
+  if (out) { await loadRegistry(); }
+}
+
+async function objectTo(pid) {
+  const body = prompt("Objection (will survive into the sealed record):");
+  if (!body) return;
+  if (await api(`/api/promotions/${pid}/object`, { body })) { await loadRegistry(); }
+}
+
+async function resolveObjection(pid, oid) {
+  const resolution = confirm("Uphold the objection? OK = uphold (aborts the promotion), Cancel = respond") ? "upheld" : "responded";
+  const body = prompt(`Resolution text (${resolution}):`);
+  if (!body) return;
+  if (await api(`/api/promotions/${pid}/objections/${oid}/resolve`, { resolution, body })) { await loadRegistry(); }
+}
+
+async function waive(pid) {
+  const reason = prompt("Waive reason (recorded as fcp_waived: true — disclosed, not hidden):");
+  if (!reason) return;
+  if (await api(`/api/promotions/${pid}/waive`, { reason })) { await loadRegistry(); }
+}
+
+async function promoAction(pid, action) {
+  if (await api(`/api/promotions/${pid}/${action}`)) { await loadRegistry(); }
+}
+
+async function demote(id, version) {
+  const reason = prompt("Deprecation reason (seals a superseding record):");
+  if (!reason) return;
+  if (await api(`/api/prompts/${id}/demote/${version}`, { reason })) { await loadRegistry(); }
 }
 
 function render() {
@@ -438,6 +529,7 @@ function render() {
             <button onclick="event.stopPropagation(); viewBody('${d.id}', '${d.version}', '${d.file || ""}')">View body</button>
             <button onclick="event.stopPropagation(); alert('Run via: ./scripts/execute_with_jules.sh ${d.id} \\"<task>\\" --version ${d.version}')">Run</button>
             <button onclick="event.stopPropagation(); alert('Eval status: ${d.evalStatus}')">Eval history</button>
+            ${promoCell(d)}
           </div>
         </div>
       </div>

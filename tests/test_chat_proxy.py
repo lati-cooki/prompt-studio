@@ -83,6 +83,71 @@ class TestPostChat(unittest.TestCase):
         # Last write should be [DONE]
         self.assertIn(b"[DONE]", written[-1])
 
+    def test_anthropic_stream_error_concealed(self):
+        handler = _make_handler()
+        handler.read_json_body = lambda: {
+            "provider": "anthropic",
+            "model": "test-model",
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+        handler.send_response = MagicMock()
+        handler.send_header = MagicMock()
+        handler.end_headers = MagicMock()
+        handler.send_json = MagicMock()
+        handler._anthropic_clients = {}
+
+        mock_client = MagicMock()
+        mock_stream = MagicMock()
+        mock_stream.__enter__ = MagicMock(
+            side_effect=Exception("Super secret exception details")
+        )
+        mock_stream.__exit__ = MagicMock()
+        mock_client.messages.stream = MagicMock(return_value=mock_stream)
+
+        written = []
+        handler.wfile.write = lambda b: written.append(b)
+        handler.wfile.flush = MagicMock()
+
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
+            with patch("server.anthropic") as mock_anthropic:
+                mock_anthropic.Anthropic = MagicMock(return_value=mock_client)
+                handler.handle_post_chat()
+
+        self.assertGreater(len(written), 0)
+        chunk = json.loads(written[0].decode().removeprefix("data: ").strip())
+        self.assertEqual(chunk["error"], "An internal error occurred.")
+        self.assertNotIn("Super secret exception details", written[0].decode())
+        self.assertIn(b"[DONE]", written[-1])
+
+    def test_openai_compat_stream_error_concealed(self):
+        handler = _make_handler()
+        handler.read_json_body = lambda: {
+            "provider": "openai",
+            "model": "test-model",
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+        handler.send_response = MagicMock()
+        handler.send_header = MagicMock()
+        handler.end_headers = MagicMock()
+        handler.send_json = MagicMock()
+
+        written = []
+        handler.wfile.write = lambda b: written.append(b)
+        handler.wfile.flush = MagicMock()
+
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
+            with patch("urllib.request.urlopen") as mock_urlopen:
+                mock_urlopen.side_effect = Exception(
+                    "Top secret internal path /var/lib/..."
+                )
+                handler.handle_post_chat()
+
+        self.assertGreater(len(written), 0)
+        chunk = json.loads(written[0].decode().removeprefix("data: ").strip())
+        self.assertEqual(chunk["error"], "An internal error occurred.")
+        self.assertNotIn("Top secret internal path", written[0].decode())
+        self.assertIn(b"[DONE]", written[-1])
+
 
 class TestPromptDraft(unittest.TestCase):
     def _make_db(self):

@@ -4,6 +4,7 @@ import re
 import os
 import socketserver
 import json
+import logging
 import sqlite3
 import urllib.request
 import urllib.error
@@ -963,7 +964,8 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 self.wfile.write(b"data: [DONE]\n\n")
                 self.wfile.flush()
         except Exception as err:
-            error_chunk = json.dumps({"error": str(err)})
+            logging.error("Anthropic stream error", exc_info=True)
+            error_chunk = json.dumps({"error": "An internal error occurred."})
             self.wfile.write(f"data: {error_chunk}\n\n".encode())
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
@@ -1006,7 +1008,8 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
         except Exception as err:
-            error_chunk = json.dumps({"error": str(err)})
+            logging.error("OpenAI-compat stream error", exc_info=True)
+            error_chunk = json.dumps({"error": "An internal error occurred."})
             self.wfile.write(f"data: {error_chunk}\n\n".encode())
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()

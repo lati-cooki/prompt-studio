@@ -141,3 +141,68 @@ class TestAppendToIndex(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestInsertIntoDb(unittest.TestCase):
+    """register_prompt also records the prompt in the live SQLite DB, so it
+    appears in /api/registry without waiting for a server restart."""
+
+    def _make_db(self, path):
+        import sqlite3
+        conn = sqlite3.connect(path)
+        schema = (Path(__file__).parent.parent / "schema.sql").read_text()
+        conn.executescript(schema)
+        conn.commit()
+        conn.close()
+
+    def _entry(self):
+        e = _sample_draft()
+        del e["body"]
+        return e
+
+    def test_inserts_row_with_body_and_json_lists(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as d:
+            db = os.path.join(d, "studio.db")
+            self._make_db(db)
+            status, _ = rp.insert_into_db(db, self._entry(), body="You are helpful.")
+            self.assertEqual(status, "inserted")
+            conn = sqlite3.connect(db)
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT * FROM prompts WHERE id='my_prompt' AND version='0.1.0'").fetchone()
+            self.assertEqual(row["body"], "You are helpful.")
+            self.assertEqual(json.loads(row["tested_on"]), ["claude-sonnet-4-6"])
+            self.assertEqual(json.loads(row["composes"]), [])
+            conn.close()
+
+    def test_existing_row_kept_untouched(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as d:
+            db = os.path.join(d, "studio.db")
+            self._make_db(db)
+            conn = sqlite3.connect(db)
+            conn.execute("INSERT INTO prompts (id, version, status) "
+                         "VALUES ('my_prompt', '0.1.0', 'production')")
+            conn.commit()
+            conn.close()
+            status, _ = rp.insert_into_db(db, self._entry(), body="x")
+            self.assertEqual(status, "exists")
+            conn = sqlite3.connect(db)
+            row = conn.execute(
+                "SELECT status FROM prompts WHERE id='my_prompt'").fetchone()
+            self.assertEqual(row[0], "production")  # live state never clobbered
+            conn.close()
+
+    def test_missing_db_file_skips(self):
+        status, detail = rp.insert_into_db("/nonexistent/studio.db", self._entry())
+        self.assertEqual(status, "skipped")
+        self.assertIn("backfill", detail)
+
+    def test_db_without_prompts_table_skips(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as d:
+            db = os.path.join(d, "bare.db")
+            sqlite3.connect(db).close()
+            status, _ = rp.insert_into_db(db, self._entry())
+            self.assertEqual(status, "skipped")

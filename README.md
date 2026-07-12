@@ -73,7 +73,7 @@ python3 scripts/register_prompt.py \
   --index registry/INDEX.json
 ```
 
-Duplicate-checks by `id + version`, writes atomically, strips `body` from the registry entry.
+Duplicate-checks by `id + version`, writes atomically, strips `body` from the registry entry. Also records the prompt in the live studio DB (`--db`, default `prompt_studio.db`; `--no-db` to skip) so it appears in `/api/registry` immediately — if the DB is absent, the server's boot-time backfill picks it up from `INDEX.json` instead.
 
 ### Execute a task with a registered prompt
 

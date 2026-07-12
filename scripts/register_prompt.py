@@ -11,6 +11,7 @@ Usage:
 import argparse
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -67,11 +68,55 @@ def append_to_index(index_path: str, entry: dict) -> None:
         raise
 
 
+def insert_into_db(db_path: str, entry: dict, body: str = ""):
+    """Record the prompt in the live SQLite DB so /api/registry shows it
+    without waiting for a server restart.
+
+    INSERT OR IGNORE on (id, version): an existing row keeps its live state
+    (promotion-flow status flips are never clobbered). Returns a
+    (status, detail) tuple — "inserted" | "exists" | "skipped". Missing DB
+    or missing table is a skip, not an error: the server's boot-time
+    backfill picks the prompt up from INDEX.json instead."""
+    if not os.path.exists(db_path):
+        return ("skipped", f"{db_path} not found — server backfill will pick it up on next boot")
+    conn = sqlite3.connect(db_path)
+    try:
+        has_table = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='prompts'").fetchone()
+        if not has_table:
+            return ("skipped", "no prompts table — server backfill will pick it up on next boot")
+        cur = conn.execute(
+            """INSERT OR IGNORE INTO prompts
+               (id, version, status, tier, owner, body, use_case,
+                cost_per_run_usd, tokens_prompt_body, default_model,
+                eval_status, file, notes, composes, tested_on)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                entry.get("id"), entry.get("version"), entry.get("status"),
+                entry.get("tier"), entry.get("owner"), body, entry.get("use_case"),
+                entry.get("cost_per_run_usd"), entry.get("tokens_prompt_body"),
+                entry.get("default_model"), entry.get("eval_status"),
+                entry.get("file"), entry.get("notes"),
+                json.dumps(entry.get("composes", [])),
+                json.dumps(entry.get("tested_on", [])),
+            ),
+        )
+        conn.commit()
+        if cur.rowcount:
+            return ("inserted", f"{entry.get('id')}@{entry.get('version')} added to {db_path}")
+        return ("exists", f"{entry.get('id')}@{entry.get('version')} already in {db_path}; live row kept")
+    finally:
+        conn.close()
+
+
 def main():
     parser = argparse.ArgumentParser(description="Register a prompt draft into INDEX.json.")
     parser.add_argument("--draft",     required=True, help="Draft JSON file (from exportToRegistryDraft)")
     parser.add_argument("--eval-data", required=True, help="Eval data JSON file (from evaluate_prompt.py)")
     parser.add_argument("--index",     default="registry/INDEX.json")
+    parser.add_argument("--db",        default=os.environ.get("DB_PATH", "prompt_studio.db"),
+                        help="Live studio DB to record the prompt in (skipped if absent)")
+    parser.add_argument("--no-db",     action="store_true", help="Skip the DB write")
     args = parser.parse_args()
 
     with open(args.draft) as f:
@@ -94,6 +139,16 @@ def main():
     append_to_index(args.index, entry)
 
     print(f"Registered {prompt_id}@{version} → {args.index}")
+
+    if not args.no_db:
+        try:
+            status, detail = insert_into_db(args.db, entry, body=draft.get("body", ""))
+            print(f"DB: {status} — {detail}")
+        except sqlite3.Error as e:
+            # INDEX.json is the canonical artifact and was written; the boot
+            # backfill heals the DB, so a DB hiccup is a warning, not a failure.
+            print(f"WARNING: DB write failed ({e}); server backfill will pick it up on next boot",
+                  file=sys.stderr)
 
 
 if __name__ == "__main__":

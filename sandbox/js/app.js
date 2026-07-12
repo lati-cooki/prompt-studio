@@ -29,22 +29,6 @@ const registryPromptsMap = new Map();
 
 window.sealActivePane = () => paneContext(activePaneMap, ALL_MODELS);
 
-const paneContainer = document.getElementById("pane-container");
-const stateA = createPaneState(DEFAULT_SYSTEM_PROMPT);
-let   stateB = null;
-let   paneB  = null;
-
-let modelKeyA = getActiveModelKey();
-let modelKeyB = null;
-
-const paneA = createPane({
-  id:              "A",
-  container:       paneContainer,
-  initialPrompt:   DEFAULT_SYSTEM_PROMPT,
-  modelKeys:       Object.keys(ALL_MODELS),
-  initialModelKey: modelKeyA,
-});
-
 const sessionsStore = createSessionsStore();
 
 // ── DOM refs ───────────────────────────────────────────
@@ -149,7 +133,7 @@ function createOrUpdatePane(modelKey) {
   const meter = createMeter({
     pane,
     state,
-    contextWindow: liveModels[modelKey]?.contextWindow ?? 32768,
+    contextWindow: ALL_MODELS[modelKey]?.contextWindow ?? 32768,
     getDraftText:  () => $input.value,
   });
   pane.onUsage = (usage) => {
@@ -180,7 +164,7 @@ function activePanes() {
   return Object.entries(activePaneMap).map(([modelKey, { state, pane }]) => ({
     state,
     pane,
-    model: liveModels[modelKey],
+    model: ALL_MODELS[modelKey],
   }));
 }
 
@@ -277,12 +261,6 @@ $includeDrafts?.addEventListener("change", () => {
 });
 
 // ── New UI refs ──────────────────────────────────────────
-const $segSingle     = document.getElementById("seg-single");
-const $segCompare    = document.getElementById("seg-compare");
-const $stopBoth      = document.getElementById("stop-both");
-const $registrySelect = document.getElementById("registry-prompt-select");
-const $registryLoadBtn = document.getElementById("registry-load-btn");
-const $registryStatus  = document.getElementById("registry-status");
 const $composerLabel = document.getElementById("composer-label");
 const $sendHint      = document.getElementById("send-hint");
 const $railModeTag   = document.getElementById("rail-mode-tag");
@@ -551,7 +529,7 @@ function loadEntry(entry) {
   const { promptRef, models, panes, vaultConfig } = resolveSession(entry);
 
   if (models.length) {
-    const valid = models.filter(k => liveModels[k]);
+    const valid = models.filter(k => ALL_MODELS[k]);
     if (valid.length) {
       selectedModelKeys = new Set(valid);
       buildModelSelector([...selectedModelKeys]);
@@ -656,76 +634,6 @@ $exportBtn.addEventListener("click", () => {
   const date     = new Date().toISOString().slice(0, 10);
   triggerMarkdownDownload({ filename: `${slugify(name)}-${date}.md`, markdown });
 });
-
-function showRegistryStatus(msg, isError = false) {
-  $registryStatus.hidden = false;
-  $registryStatus.textContent = msg;
-  $registryStatus.style.color = isError ? "var(--red)" : "";
-  if (!isError) {
-    setTimeout(() => { $registryStatus.hidden = true; }, 5000);
-  }
-}
-
-function paneHasConversation(state) {
-  return state.messages.some((m) => m.role === "user" || m.role === "assistant");
-}
-
-function applyRegistryPromptToPane(state, pane, body) {
-  state.applyPrompt(body);
-  pane.textarea.value = body;
-  pane.refreshPreview();
-  pane.clearLog();
-}
-
-async function populateRegistrySelect() {
-  try {
-    const prompts = listLoadablePrompts(await fetchRegistryIndex());
-    $registrySelect.innerHTML = '<option value="">Load from registry…</option>';
-    for (const p of prompts) {
-      const opt = document.createElement("option");
-      opt.value = p.file;
-      opt.textContent = `${p.id}@${p.version}`;
-      if (p.use_case) opt.title = p.use_case;
-      $registrySelect.appendChild(opt);
-    }
-  } catch (err) {
-    $registrySelect.innerHTML =
-      '<option value="">Registry unavailable</option>';
-    showRegistryStatus(err.message, true);
-  }
-}
-
-async function handleRegistryLoad() {
-  const file = $registrySelect.value;
-  if (!file) return;
-
-  const label = $registrySelect.selectedOptions[0]?.textContent ?? file;
-  const hasChat =
-    paneHasConversation(stateA) || (stateB && paneHasConversation(stateB));
-  if (hasChat) {
-    const ok = confirm(
-      `Load ${label} into pane A? The current conversation will be cleared.`
-    );
-    if (!ok) return;
-  }
-
-  $registryLoadBtn.disabled = true;
-  showRegistryStatus("Loading…");
-  try {
-    const body = await loadRegistryPromptBody(file);
-    applyRegistryPromptToPane(stateA, paneA, body);
-    $topbarSubtitle.textContent = `registry · ${label}`;
-    for (const { meter } of Object.values(activePaneMap)) meter?.render();
-    showRegistryStatus(`Loaded ${label}`);
-  } catch (err) {
-    showRegistryStatus(err.message, true);
-  } finally {
-    $registryLoadBtn.disabled = false;
-  }
-}
-
-$registryLoadBtn.addEventListener("click", handleRegistryLoad);
-populateRegistrySelect();
 
 refreshSessionList();
 

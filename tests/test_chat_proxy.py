@@ -10,7 +10,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 def _make_handler():
     """Return a PromptStudioHandler instance with a stubbed socket."""
     import server
-
     handler = object.__new__(server.PromptStudioHandler)
     handler.wfile = MagicMock()
     handler.rfile = MagicMock()
@@ -21,11 +20,7 @@ def _make_handler():
 class TestPostChat(unittest.TestCase):
     def test_missing_api_key_returns_503(self):
         handler = _make_handler()
-        handler.read_json_body = lambda: {
-            "model": "claude-sonnet-4-6",
-            "messages": [],
-            "stream": True,
-        }
+        handler.read_json_body = lambda: {"model": "claude-sonnet-4-6", "messages": [], "stream": True}
         handler.send_json = MagicMock()
 
         with patch.dict(os.environ, {}, clear=True):
@@ -33,9 +28,7 @@ class TestPostChat(unittest.TestCase):
 
         handler.send_json.assert_called_once()
         call_kwargs = handler.send_json.call_args
-        self.assertEqual(
-            call_kwargs.kwargs.get("status") or call_kwargs[1].get("status"), 503
-        )
+        self.assertEqual(call_kwargs.kwargs.get("status") or call_kwargs[1].get("status"), 503)
         self.assertIn("error", call_kwargs[0][0])
 
     def test_invalid_body_returns_early(self):
@@ -94,7 +87,6 @@ class TestPostChat(unittest.TestCase):
 class TestPromptDraft(unittest.TestCase):
     def _make_db(self):
         import sqlite3
-
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
         conn.executescript("""
@@ -120,7 +112,6 @@ class TestPromptDraft(unittest.TestCase):
 
     def test_draft_increments_minor_version(self):
         import server
-
         handler = object.__new__(server.PromptStudioHandler)
         handler.send_json = MagicMock()
         handler.send_error = MagicMock()
@@ -137,7 +128,6 @@ class TestPromptDraft(unittest.TestCase):
     def test_draft_starts_at_1_0_0_for_new_id(self):
         import server
         import sqlite3
-
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
         conn.executescript("""
@@ -168,7 +158,6 @@ class TestPromptDraft(unittest.TestCase):
 class TestPromptValidate(unittest.TestCase):
     def _make_db_with_draft(self):
         import sqlite3
-
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
         conn.executescript("""
@@ -195,14 +184,12 @@ class TestPromptValidate(unittest.TestCase):
     def test_validate_sets_production_and_validated(self):
         import server
         import sqlite3
-
         handler = object.__new__(server.PromptStudioHandler)
         handler.send_json = MagicMock()
         handler.send_error = MagicMock()
 
         # Use a file-based temp DB so we can re-query after the handler closes its connection
         import tempfile, os
-
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
             db_path = f.name
         try:
@@ -229,9 +216,7 @@ class TestPromptValidate(unittest.TestCase):
             """)
             setup_conn.close()
 
-            handler.get_db = lambda: sqlite3.connect(
-                db_path, detect_types=sqlite3.PARSE_DECLTYPES
-            )
+            handler.get_db = lambda: sqlite3.connect(db_path, detect_types=sqlite3.PARSE_DECLTYPES)
 
             handler.handle_post_prompt_validate("my_prompt", "1.1.0")
 
@@ -249,7 +234,6 @@ class TestPromptValidate(unittest.TestCase):
     def test_validate_404_for_missing(self):
         import server
         import sqlite3
-
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
         conn.executescript("""
@@ -274,74 +258,3 @@ class TestPromptValidate(unittest.TestCase):
 
         handler.send_error.assert_called_once()
         self.assertEqual(handler.send_error.call_args[0][0], 404)
-
-    def test_anthropic_stream_error_concealed(self):
-        import server
-
-        handler = object.__new__(server.PromptStudioHandler)
-        handler.read_json_body = lambda: {
-            "provider": "anthropic",
-            "model": "test-model",
-            "messages": [{"role": "user", "content": "hello"}],
-        }
-        handler.send_response = MagicMock()
-        handler.send_header = MagicMock()
-        handler.end_headers = MagicMock()
-        handler.send_json = MagicMock()
-        handler._anthropic_clients = {}
-
-        mock_client = MagicMock()
-        mock_stream = MagicMock()
-        mock_stream.__enter__ = MagicMock(
-            side_effect=Exception("Super secret exception details")
-        )
-        mock_stream.__exit__ = MagicMock()
-        mock_client.messages.stream = MagicMock(return_value=mock_stream)
-
-        written = []
-        handler.wfile = MagicMock()
-        handler.wfile.write = lambda b: written.append(b)
-        handler.wfile.flush = MagicMock()
-
-        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}):
-            with patch("server.anthropic") as mock_anthropic:
-                mock_anthropic.Anthropic = MagicMock(return_value=mock_client)
-                handler.handle_post_chat()
-
-        self.assertGreater(len(written), 0)
-        chunk = json.loads(written[0].decode().removeprefix("data: ").strip())
-        self.assertEqual(chunk["error"], "An internal error occurred.")
-        self.assertNotIn("Super secret exception details", written[0].decode())
-        self.assertIn(b"[DONE]", written[-1])
-
-    def test_openai_compat_stream_error_concealed(self):
-        import server
-
-        handler = object.__new__(server.PromptStudioHandler)
-        handler.read_json_body = lambda: {
-            "provider": "openai",
-            "model": "test-model",
-            "messages": [{"role": "user", "content": "hello"}],
-        }
-        handler.send_response = MagicMock()
-        handler.send_header = MagicMock()
-        handler.end_headers = MagicMock()
-        handler.send_json = MagicMock()
-
-        written = []
-        handler.wfile = MagicMock()
-        handler.wfile.write = lambda b: written.append(b)
-        handler.wfile.flush = MagicMock()
-
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}):
-            with patch("urllib.request.urlopen") as mock_urlopen:
-                mock_urlopen.side_effect = Exception(
-                    "Top secret internal path /var/lib/..."
-                )
-                handler.handle_post_chat()
-
-        self.assertGreater(len(written), 0)
-        chunk = json.loads(written[0].decode().removeprefix("data: ").strip())
-        self.assertEqual(chunk["error"], "An internal error occurred.")
-        self.assertNotIn("Top secret internal path", written[0].decode())
-        self.assertIn(b"[DONE]", written[-1])

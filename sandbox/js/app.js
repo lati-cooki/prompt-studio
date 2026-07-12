@@ -24,6 +24,7 @@ const liveModels         = {};
 let   selectedModelKeys  = new Set(Object.keys(FRONTIER_MODELS).slice(0, 1));
 let   activeSessionId    = null;
 let   activePrompt       = null;
+let   promptIndex        = [];
 const registryPromptsMap = new Map();
 
 window.sealActivePane = () => paneContext(activePaneMap, ALL_MODELS);
@@ -66,6 +67,7 @@ const $topbarSubtitle    = document.getElementById("topbar-subtitle");
 const $topbarDots        = document.getElementById("topbar-dots");
 const $sessionsList      = document.getElementById("sessions-list");
 const $promptPicker      = document.getElementById("prompt-picker");
+const $includeDrafts     = document.getElementById("include-drafts");
 const $promptBadges      = document.getElementById("prompt-badges");
 const $modelChecklist    = document.getElementById("model-checklist");
 const $registryPanelMount = document.getElementById("registry-panel-mount");
@@ -201,7 +203,8 @@ function populatePromptPicker(prompts) {
 async function loadRegistryPrompts() {
   try {
     const index   = await fetchRegistryIndex();
-    const prompts = listLoadablePrompts(index);
+    promptIndex = index;
+    const prompts = listLoadablePrompts(promptIndex, $includeDrafts?.checked);
     registryPromptsMap.clear();
     for (const p of prompts) {
       try {
@@ -245,6 +248,18 @@ $promptPicker.addEventListener("change", () => {
   const [id, version] = val.split("|");
   const prompt = registryPromptsMap.get(`${id}|${version}`);
   if (prompt) applyPromptToAllPanes(prompt);
+});
+
+$includeDrafts?.addEventListener("change", async () => {
+  const prompts = listLoadablePrompts(promptIndex, $includeDrafts.checked);
+  registryPromptsMap.clear();
+  for (const p of prompts) {
+    try {
+      const body = await loadRegistryPromptBody(p.file);
+      registryPromptsMap.set(`${p.id}|${p.version}`, { ...p, body });
+    } catch { /* skip unparseable prompt */ }
+  }
+  populatePromptPicker([...registryPromptsMap.values()]);
 });
 
 // ── New UI refs ──────────────────────────────────────────

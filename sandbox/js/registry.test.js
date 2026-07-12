@@ -36,10 +36,28 @@ Fallback body here.`;
 describe("listLoadablePrompts", () => {
   it("filters prompts without file", () => {
     const out = listLoadablePrompts([
-      { id: "a", version: "1.0", file: "p/a.md" },
-      { id: "b", version: "1.0", file: null },
+      { id: "a", version: "1.0", file: "p/a.md", status: "production" },
+      { id: "b", version: "1.0", file: null, status: "production" },
     ]);
     assert.equal(out.length, 1);
     assert.equal(out[0].id, "a");
+  });
+
+  it("defaults to production only", () => {
+    const prompts = [
+      { id: "a", version: "1.0.0", file: "a.md", status: "production" },
+      { id: "b", version: "1.0.0", file: "b.md", status: "draft" },
+    ];
+    const out = listLoadablePrompts(prompts);
+    assert.deepEqual(out.map((p) => p.id), ["a"]);
+  });
+
+  it("includes drafts when asked (nightly)", () => {
+    const prompts = [
+      { id: "a", version: "1.0.0", file: "a.md", status: "production" },
+      { id: "b", version: "1.0.0", file: "b.md", status: "draft" },
+    ];
+    const out = listLoadablePrompts(prompts, true);
+    assert.deepEqual(out.map((p) => p.id), ["a", "b"]);
   });
 });

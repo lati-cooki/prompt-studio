@@ -47,9 +47,11 @@ export async function loadRegistryPromptBody(filePath) {
   return extractPromptBody(markdown);
 }
 
-/** Prompts with archived .md files, newest version first per id. */
-export function listLoadablePrompts(prompts) {
-  const withFile = prompts.filter((p) => p.file);
+/** Prompts with archived .md files, newest version first per id.
+ *  Production-only by default (Rust-channel model); includeDrafts = "nightly". */
+export function listLoadablePrompts(prompts, includeDrafts = false) {
+  const withFile = prompts.filter(
+    (p) => p.file && (includeDrafts || p.status === "production"));
   return withFile.sort((a, b) => {
     const idCmp = a.id.localeCompare(b.id);
     if (idCmp !== 0) return idCmp;

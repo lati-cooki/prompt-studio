@@ -1,36 +1,58 @@
 # Prompt Studio
 
-Prompt Studio is a unified, automated environment for drafting, testing, registering, and evaluating AI prompts. It merges the live iteration capabilities of a local `sandbox` with the rigid version control and evaluation schema of a `registry`.
+Prompt Studio is a local-first workbench for turning AI-assisted deliberation into decisions you can trust: draft and iterate prompts against local (MLX / LM Studio) or frontier models, keep a versioned prompt registry with an eval pipeline, and seal the decisions you reach as signed, hash-chained ClisTa records in ThreadHub.
 
-Crucially, **Prompt Studio is designed to be operated by Jules**, Google's asynchronous coding agent.
+It is the "deliberate" layer of the ClisTa decision stack (deliberate → shape → notarize) and wears the clista.ai design system — ink on paper, color only as a protocol signal.
 
-## Repository Structure
+## The app
 
-- `sandbox/` — Live prompt iteration UI. Single-pane or A/B compare mode. Connects to local MLX models via `http.server`-based Python backend.
-- `registry/` — Version-controlled archive of production-ready prompts, evaluations, and `INDEX.json`.
-- `scripts/` — CLI tools for the eval and registration pipeline (see below).
-- `server.py` — Python API serving both UIs over SQLite (`schema.sql`).
-- `schema.sql` — Unified SQLite schema: sessions, prompts, evals.
-- `JULES_WORKFLOW.md` — Operational manual for Jules in this repository.
-- `TODO.md` — Task backlog.
+A single-page shell (`sandbox/index.html`, no build step) with five views:
+
+- **Home** — recent decisions + how the pieces fit together.
+- **Deliberate** — the prompt sandbox: chat a decision through with your chosen model, load a system prompt from the Registry, pull vault context (RAG), then **Seal as decision** — assisted by ✨ Suggest, which drafts the seal fields from the conversation.
+- **Decisions** — signed decision records read back from ThreadHub, with chain verification (`✓ chain valid`). Verification proves structure, never content.
+- **Registry** — the versioned prompt library, with the promotion workflow (below).
+- **Sessions** — saved deliberations.
+
+## Promotion is a recorded decision (Threads Phase 4)
+
+Prompts don't flip to `production` by editing a field — promotion opens a **final comment period (FCP)**:
+
+1. `POST /api/prompts/<id>/promote/<version>` opens a time-boxed objection window and pins the latest eval run (content-hashed) as evidence.
+2. Objections filed during the window survive into the record; an upheld objection aborts the promotion.
+3. Status flips only when the window closes clean — or is explicitly **waived, disclosed as `fcp_waived: true`** in the sealed record. Absence of evidence is disclosed, never faked.
+4. Every terminal outcome (closed / waived / aborted / deprecated) seals a decision-as-claim to ThreadHub.
+
+Direct writes of `status='production'` (create, update, or the old validate route) return `409` pointing at the promote flow. Full route list in `docs/superpowers/specs/2026-07-12-threads-phase4-promotion-decision-design.md`.
+
+## Repository structure
+
+- `sandbox/` — the SPA shell + `js/` modules (config, panes, sessions, seal-extract, registry picker).
+- `registry/` — prompt archive, evals, `INDEX.json`, and the registry widget (iframe).
+- `threads/` — the Decisions widget (iframe) reading ThreadHub through the server proxy.
+- `scripts/` — eval / register / execute pipeline (below).
+- `server.py` — stdlib-Python API + static server: sessions, prompts, chat proxy (Anthropic / OpenAI-compat / MLX), ThreadHub proxy, seal orchestration, promotion FCP.
+- `seal.py`, `promotion_store.py`, `promotion_evidence.py`, `promotion_seal.py` — seal + promotion machinery.
+- `schema.sql` — SQLite schema: sessions, prompts, evals, promotions, promotion_objections.
+- `JULES_WORKFLOW.md` — operational manual for Jules in this repository.
 
 ## Running
 
 ```bash
-# Start the API + static file server (serves sandbox at / and registry at /registry)
-python3 server.py
+# ThreadHub sidecar (:8110) — canonical checkout lives in the lati-cooki/clista monorepo
+bash sandbox/_run-threadhub.sh &
 
-# Or run the sandbox standalone on port 7777
-cd sandbox && python3 -m http.server 7777
+# API + UI (serves the shell at /, registry at /registry/, decisions at /threads/)
+python3 server.py            # port 8000; PORT=8001 python3 server.py to override
 ```
 
-Requires: `pip install anthropic` for the eval script.
+Environment (all optional): `PORT`, `ALLOWED_ORIGIN` (CORS allowlist, comma-separated; default `http://localhost:7777`), `LM_STUDIO_URL`, `CLISTA_CLI` (path to the ClisTa CLI; defaults to `~/ClisTa-Protocol/src/cli.js`), `THREADHUB_PORT`, plus API keys in `.env` for frontier models and the eval script.
+
+`sandbox/launch.command` opens the full local stack (MLX models, vault-search, ThreadHub) in Terminal windows — note its web-server script predates `server.py` and still serves the old static path.
 
 ## Scripts
 
 ### Evaluate a prompt
-
-Run a prompt file against a directive via the Claude API and write a structured eval report:
 
 ```bash
 python3 scripts/evaluate_prompt.py \
@@ -40,11 +62,9 @@ python3 scripts/evaluate_prompt.py \
   --output-dir registry/evals/
 ```
 
-Writes `registry/evals/eval_<id>.md` and `registry/evals/eval_<id>_data.json`. Fill in the `## Grade` field in the markdown, then update the `grade` key in the data JSON before registering.
+Writes `eval_<id>.md` + `eval_<id>_data.json`. The newest `*_data.json` for a version is what the promotion flow pins as evidence.
 
 ### Register a prompt
-
-Merge a sandbox draft JSON + eval data JSON into `registry/INDEX.json`:
 
 ```bash
 python3 scripts/register_prompt.py \
@@ -53,19 +73,13 @@ python3 scripts/register_prompt.py \
   --index registry/INDEX.json
 ```
 
-Duplicate-checks by `id + version`. Writes atomically via temp-file rename. Strips the `body` field from the registry entry.
+Duplicate-checks by `id + version`, writes atomically, strips `body` from the registry entry.
 
 ### Execute a task with a registered prompt
 
-Look up a prompt by registry ID, read its body, and feed it to `jules new` as context:
-
 ```bash
 ./scripts/execute_with_jules.sh consensus_protocol "Evaluate the StrategiAI plan"
-
-# Specific version
 ./scripts/execute_with_jules.sh consensus_protocol "Evaluate X" --version 1.1.0
-
-# Preview without running jules
 ./scripts/execute_with_jules.sh consensus_protocol "Evaluate X" --dry-run
 ```
 
@@ -73,18 +87,15 @@ Prefers `production` > `active` > `draft` > `deprecated` when no version is spec
 
 ## The Tri-Role Jules Architecture
 
-Jules acts as the primary engine for this repository in three distinct capacities:
+Jules (Google's asynchronous coding agent) operates this repository in three capacities:
 
-1. **Jules as the Developer:** Building and maintaining infrastructure. The sandbox UI and registry interface share a unified SQLite backend via `server.py`.
-2. **Jules as the Evaluator:** Automated QA pipeline for prompts. `evaluate_prompt.py` runs a draft against a directive via the Claude API; `register_prompt.py` commits it to the registry once graded.
-3. **Jules as the Executor:** Consuming production prompts from the registry to autonomously execute complex reasoning tasks via `execute_with_jules.sh`.
+1. **Developer** — building and maintaining the infrastructure.
+2. **Evaluator** — the automated QA pipeline (`evaluate_prompt.py` → grade → `register_prompt.py`).
+3. **Executor** — consuming production prompts to run complex reasoning tasks via `execute_with_jules.sh`.
 
 ## Tests
 
 ```bash
-# Python (server + eval + register + lookup)
-python3 -m pytest tests/ -v
-
-# JavaScript (state, sessions, stream, tokens)
-cd sandbox && node --test js/*.test.js
+python3 -m unittest discover tests -v     # server, seal, promotion FCP, eval, register, lookup
+node --test sandbox/js/*.test.js          # state, sessions, stream, tokens, registry picker, seal-extract
 ```

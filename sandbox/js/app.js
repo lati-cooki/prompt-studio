@@ -200,19 +200,42 @@ function populatePromptPicker(prompts) {
   }
 }
 
-async function loadRegistryPrompts() {
-  try {
-    const index   = await fetchRegistryIndex();
-    promptIndex = index;
-    const prompts = listLoadablePrompts(promptIndex, $includeDrafts?.checked);
-    registryPromptsMap.clear();
-    for (const p of prompts) {
+// Monotonic guard against overlapping picker refreshes (e.g. rapid toggling
+// of "include drafts"): only the most recently started refresh is allowed
+// to mutate shared state or repopulate the picker.
+let pickerLoadSeq = 0;
+
+/** Re-filter promptIndex against the current toggle state, fetching only
+ *  bodies not already cached in registryPromptsMap, then repopulate the
+ *  picker in the filtered/sorted order. */
+async function refreshPromptPicker() {
+  const seq = ++pickerLoadSeq;
+  const prompts = listLoadablePrompts(promptIndex, $includeDrafts?.checked);
+  const loaded = [];
+  for (const p of prompts) {
+    const key = `${p.id}|${p.version}`;
+    let entry = registryPromptsMap.get(key);
+    if (!entry) {
       try {
         const body = await loadRegistryPromptBody(p.file);
-        registryPromptsMap.set(`${p.id}|${p.version}`, { ...p, body });
-      } catch { /* skip unparseable prompt */ }
+        if (seq !== pickerLoadSeq) return; // superseded mid-fetch
+        entry = { ...p, body };
+        registryPromptsMap.set(key, entry);
+      } catch {
+        continue; // skip unparseable prompt
+      }
     }
-    populatePromptPicker([...registryPromptsMap.values()]);
+    loaded.push(entry);
+  }
+  if (seq !== pickerLoadSeq) return; // superseded
+  populatePromptPicker(loaded);
+}
+
+async function loadRegistryPrompts() {
+  try {
+    const index = await fetchRegistryIndex();
+    promptIndex = index;
+    await refreshPromptPicker();
   } catch (err) {
     console.warn("Registry unavailable:", err.message);
   }
@@ -250,16 +273,8 @@ $promptPicker.addEventListener("change", () => {
   if (prompt) applyPromptToAllPanes(prompt);
 });
 
-$includeDrafts?.addEventListener("change", async () => {
-  const prompts = listLoadablePrompts(promptIndex, $includeDrafts.checked);
-  registryPromptsMap.clear();
-  for (const p of prompts) {
-    try {
-      const body = await loadRegistryPromptBody(p.file);
-      registryPromptsMap.set(`${p.id}|${p.version}`, { ...p, body });
-    } catch { /* skip unparseable prompt */ }
-  }
-  populatePromptPicker([...registryPromptsMap.values()]);
+$includeDrafts?.addEventListener("change", () => {
+  refreshPromptPicker();
 });
 
 // ── New UI refs ──────────────────────────────────────────

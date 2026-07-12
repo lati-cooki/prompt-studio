@@ -43,21 +43,32 @@ describe("listLoadablePrompts", () => {
     assert.equal(out[0].id, "a");
   });
 
-  it("defaults to production only", () => {
+  it("defaults to production and active, excludes draft", () => {
     const prompts = [
       { id: "a", version: "1.0.0", file: "a.md", status: "production" },
+      { id: "c", version: "1.0.0", file: "c.md", status: "active" },
       { id: "b", version: "1.0.0", file: "b.md", status: "draft" },
     ];
     const out = listLoadablePrompts(prompts);
-    assert.deepEqual(out.map((p) => p.id), ["a"]);
+    assert.deepEqual(out.map((p) => p.id), ["a", "c"]);
   });
 
-  it("includes drafts when asked (nightly)", () => {
+  it("includes drafts when asked (nightly), plus production and active", () => {
     const prompts = [
       { id: "a", version: "1.0.0", file: "a.md", status: "production" },
+      { id: "c", version: "1.0.0", file: "c.md", status: "active" },
       { id: "b", version: "1.0.0", file: "b.md", status: "draft" },
     ];
     const out = listLoadablePrompts(prompts, true);
-    assert.deepEqual(out.map((p) => p.id), ["a", "b"]);
+    assert.deepEqual(out.map((p) => p.id), ["a", "b", "c"]);
+  });
+
+  it("never includes deprecated prompts, even with includeDrafts", () => {
+    const prompts = [
+      { id: "a", version: "1.0.0", file: "a.md", status: "production" },
+      { id: "d", version: "1.0.0", file: "d.md", status: "deprecated" },
+    ];
+    assert.deepEqual(listLoadablePrompts(prompts).map((p) => p.id), ["a"]);
+    assert.deepEqual(listLoadablePrompts(prompts, true).map((p) => p.id), ["a"]);
   });
 });

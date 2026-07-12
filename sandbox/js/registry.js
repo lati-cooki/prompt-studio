@@ -48,10 +48,12 @@ export async function loadRegistryPromptBody(filePath) {
 }
 
 /** Prompts with archived .md files, newest version first per id.
- *  Production-only by default (Rust-channel model); includeDrafts = "nightly". */
+ *  Default = live prompts (production/active); includeDrafts adds the rest ("nightly").
+ *  Deprecated prompts never load. */
 export function listLoadablePrompts(prompts, includeDrafts = false) {
+  const live = (p) => p.status === "production" || p.status === "active";
   const withFile = prompts.filter(
-    (p) => p.file && (includeDrafts || p.status === "production"));
+    (p) => p.file && p.status !== "deprecated" && (includeDrafts || live(p)));
   return withFile.sort((a, b) => {
     const idCmp = a.id.localeCompare(b.id);
     if (idCmp !== 0) return idCmp;

@@ -13,3 +13,6 @@ Assign these tasks to Jules using `jules new "<task string>"`.
 
 ## Phase 3: Executor Demonstration
 - [x] Write a wrapper script `scripts/execute_with_jules.sh` that allows a user to specify a Registry ID (e.g., `consensus_protocol`) and a task. The script should extract the prompt from the registry and feed it directly into a `jules new` command as context.
+
+## Threads add-on
+- [x] Threads add-on Phase 4 — registry promotion recorded as ClisTa decision (FCP): SHIPPED

@@ -1,7 +1,7 @@
 # Threads Phase 4 — Registry promotion recorded as a ClisTa decision (FCP-shaped)
 
 **Date:** 2026-07-12
-**Status:** Approved by owner
+**Status:** Implemented
 **Repo:** `lati-cooki/prompt-studio` (this repo), branch `threads-phase4`
 **Predecessors:** Phase 1 (Threads tab, read-only), Phase 2 (seal-as-decision write path), Phase 3 (assisted extraction) — all shipped 2026-06-14. See `2026-06-14-threads-addon-design.md` and the phase plans beside it.
 

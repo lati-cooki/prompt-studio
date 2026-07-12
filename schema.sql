@@ -40,3 +40,29 @@ CREATE TABLE IF NOT EXISTS evals (
     data_file TEXT,
     models_tested TEXT
 );
+
+CREATE TABLE IF NOT EXISTS promotions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    prompt_id TEXT NOT NULL,
+    version TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'open',
+    opened_at TEXT NOT NULL,
+    window_hours REAL NOT NULL DEFAULT 24,
+    closes_at TEXT NOT NULL,
+    resolved_at TEXT,
+    evidence_json TEXT,
+    thread_slug TEXT,
+    citation_hash TEXT,
+    sealed INTEGER NOT NULL DEFAULT 0,
+    seal_error TEXT,
+    waive_reason TEXT
+);
+
+CREATE TABLE IF NOT EXISTS promotion_objections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    promotion_id INTEGER NOT NULL,
+    raised_at TEXT NOT NULL,
+    body TEXT NOT NULL,
+    resolution TEXT,
+    resolution_body TEXT
+);

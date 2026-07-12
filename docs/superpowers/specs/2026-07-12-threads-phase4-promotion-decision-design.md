@@ -75,7 +75,7 @@ objection is resolved (responded/upheld) or the promotion is aborted.
 | `GET /api/promotions` / `GET /api/promotions/<pid>` | List / detail (detail includes objections; state reflects lazy window check). |
 | `POST /api/promotions/<pid>/object` | Body: `{body}`. 422 if empty; 409 if promotion not `open`. |
 | `POST /api/promotions/<pid>/objections/<oid>/resolve` | Body: `{resolution: responded\|upheld, body}`. `upheld` → promotion aborts (and seals the abort). |
-| `POST /api/promotions/<pid>/close` | Succeeds iff window elapsed AND no unresolved objections → state `closed`, flip `prompts.status='production', eval_status='validated'`, seal. 409 otherwise with reason. |
+| `POST /api/promotions/<pid>/close` | Succeeds iff window elapsed AND no unresolved objections → state `closed`, flip `prompts.status='production'` (`eval_status='validated'` is stamped only when the promotion carried pinned evidence — amended 2026-07-12, evidence-absent promotions must not overstate eval state), seal. 409 otherwise with reason. |
 | `POST /api/promotions/<pid>/waive` | Body: `{reason}` (required). State `waived`, flip status, seal with `fcp_waived: true`. |
 | `POST /api/promotions/<pid>/abort` | State `aborted`, status untouched, seal an abort record. |
 | `POST /api/prompts/<id>/demote/<version>` | Body: `{reason}`. Sets `status='deprecated'` and seals a superseding claim referencing the promotion's `thread_slug` (if any). |

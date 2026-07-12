@@ -70,7 +70,26 @@ class TestClose(unittest.TestCase):
         self.assertIsNotNone(out["resolved_at"])
         row = conn.execute("SELECT status, eval_status FROM prompts WHERE id='p1'").fetchone()
         self.assertEqual(row["status"], "production")
+        # no evidence was pinned -> eval_status must NOT be stamped 'validated'
+        self.assertIsNone(row["eval_status"])
+
+    def test_close_with_pinned_evidence_stamps_validated(self):
+        conn = make_db()
+        ev = {"source_file": "eval_p1_v1_0_0_x_data.json", "content_hash": "sha256:abc"}
+        p = ps.open_promotion(conn, "p1", "1.0.0", window_hours=0, evidence=ev)
+        ps.close_promotion(conn, p["id"])
+        row = conn.execute("SELECT status, eval_status FROM prompts WHERE id='p1'").fetchone()
+        self.assertEqual(row["status"], "production")
         self.assertEqual(row["eval_status"], "validated")
+
+    def test_evidenceless_close_preserves_prior_eval_status(self):
+        conn = make_db()
+        conn.execute("UPDATE prompts SET eval_status='passed' WHERE id='p1'")
+        conn.commit()
+        p = ps.open_promotion(conn, "p1", "1.0.0", window_hours=0)
+        ps.close_promotion(conn, p["id"])
+        row = conn.execute("SELECT eval_status FROM prompts WHERE id='p1'").fetchone()
+        self.assertEqual(row["eval_status"], "passed")  # untouched
 
     def test_unresolved_objection_blocks_close_past_window(self):
         conn = make_db()

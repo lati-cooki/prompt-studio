@@ -119,17 +119,27 @@ def resolve_objection(conn, pid, oid, resolution, body):
     return get_promotion(conn, pid)
 
 
-def _flip_to_production(conn, prompt_id, version):
-    conn.execute(
-        """UPDATE prompts SET status='production', eval_status='validated',
-           updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=? AND version=?""",
-        (prompt_id, version))
+def _flip_to_production(conn, prompt_id, version, validated):
+    """Flip to production; stamp eval_status='validated' only when the
+    promotion carried pinned evidence — an evidence-absent (disclosed)
+    promotion must not overstate its eval state in the DB."""
+    if validated:
+        conn.execute(
+            """UPDATE prompts SET status='production', eval_status='validated',
+               updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=? AND version=?""",
+            (prompt_id, version))
+    else:
+        conn.execute(
+            """UPDATE prompts SET status='production',
+               updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=? AND version=?""",
+            (prompt_id, version))
 
 
 def _terminate(conn, pid, state, waive_reason=None, flip=False):
     p = _require_open(conn, pid)
     if flip:
-        _flip_to_production(conn, p["prompt_id"], p["version"])
+        _flip_to_production(conn, p["prompt_id"], p["version"],
+                            validated=p["evidence"] is not None)
     conn.execute(
         "UPDATE promotions SET state=?, resolved_at=?, waive_reason=? WHERE id=?",
         (state, _iso(_now()), waive_reason, pid))

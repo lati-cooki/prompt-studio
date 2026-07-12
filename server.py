@@ -241,7 +241,21 @@ def init_db():
 class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
     _anthropic_clients = {}
     def end_headers(self):
-        self.send_header('Access-Control-Allow-Origin', '*')
+        request_origin = self.headers.get('Origin')
+        allowed_origins = [
+            o.strip()
+            for o in os.environ.get('ALLOWED_ORIGIN', 'http://localhost:7777').split(',')
+        ]
+
+        origin_to_send = None
+        if request_origin in allowed_origins or '*' in allowed_origins:
+            origin_to_send = request_origin
+        elif allowed_origins:
+            origin_to_send = allowed_origins[0]
+
+        if origin_to_send:
+            self.send_header('Access-Control-Allow-Origin', origin_to_send)
+
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         super().end_headers()

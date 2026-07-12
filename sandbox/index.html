@@ -6,51 +6,45 @@
 <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:ital,wght@0,300;0,400;0,500;0,600;0,700;1,300;1,400&family=JetBrains+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,500;1,6..72,300;1,6..72,400&display=swap" rel="stylesheet">
 <style>
 /* ── Tokens (Consensus Protocol palette) ──────────── */
+/* clista.ai design system — ink on paper; color appears only as a protocol signal */
+@import url('https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
 :root {
-  --paper:    #f6f3ec;
-  --paper-2:  #ede9e0;
-  --paper-3:  #e4dfd5;
+  --paper:    #ffffff;   /* surface */
+  --paper-2:  #f6f6f8;   /* page tint (ink-50) */
+  --paper-3:  #eeeef1;   /* sunken fill (ink-100) */
 
-  --ink:   #0c0f14;
-  --ink-2: #2c3038;
-  --ink-3: #5c636b;
-  --ink-4: #9aa0a8;
+  --ink:   #0d0d0f;
+  --ink-2: #2b2b31;
+  --ink-3: #6b6b73;
+  --ink-4: #8e8e97;
 
-  --line:   rgba(12,15,20,0.13);
-  --line-2: rgba(12,15,20,0.07);
-  --line-3: rgba(12,15,20,0.04);
+  --line:   #d7d7dd;
+  --line-2: rgba(13,13,15,0.07);
+  --line-3: rgba(13,13,15,0.04);
 
-  --amber: #a87a00;
-  --green: #2e7048;
-  --red:   #a83830;
+  --amber: #9a6b12;   /* degraded */
+  --green: #1f7a4d;   /* verified */
+  --red:   #b23a33;   /* failed */
 
-  --teal:  #2a6464;
+  --teal:  #2a5bb8;   /* evidence — interactive accent */
   --plum:  #614882;
 
-  --sans:  'Inter Tight', -apple-system, BlinkMacSystemFont, sans-serif;
-  --mono:  'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-  --serif: 'Newsreader', Georgia, 'Times New Roman', serif;
+  --sans:  'IBM Plex Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  --mono:  'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --serif: 'Jost', 'Century Gothic', system-ui, sans-serif; /* display face */
 }
 
 /* ── Reset ────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; }
 html, body {
   margin: 0; height: 100%;
-  background: var(--paper); color: var(--ink);
+  background: var(--paper-2); color: var(--ink);
   font-family: var(--sans);
   font-size: 13px; line-height: 1.55;
   -webkit-font-smoothing: antialiased;
 }
 body { display: flex; flex-direction: row; overflow: hidden; }
-
-/* Paper grain overlay */
-body::after {
-  content: '';
-  position: fixed; inset: 0;
-  pointer-events: none; z-index: 9999;
-  opacity: 0.028;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)'/%3E%3C/svg%3E");
-}
 
 /* ── Rail ────────────────────────────────────────── */
 .rail {
@@ -794,7 +788,7 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
       <button type="button" class="ghost-btn" id="seal-open-btn">Seal as decision</button>
     </div>
     <button class="stop-btn" id="stop-btn" hidden>⏹ Stop</button>
-  </div>
+  </header>
 
   <section class="home-view" id="view-home" style="display:none">
     <div id="home-empty">
@@ -875,7 +869,7 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
 
 <script type="module" src="js/app.js"></script>
 <div id="seal-modal" style="display:none;position:fixed;inset:0;background:rgba(12,15,20,.45);z-index:1000;align-items:flex-start;justify-content:center;overflow:auto">
-  <div style="background:#f6f3ec;max-width:560px;width:92%;margin:48px 0;padding:24px;border-radius:6px;font-size:13px">
+  <div style="background:var(--paper);max-width:560px;width:92%;margin:48px 0;padding:24px;border-radius:6px;font-size:13px">
     <div style="display:flex;justify-content:space-between;align-items:center;margin:0 0 12px">
       <h3 style="margin:0">Seal as decision</h3>
       <button type="button" class="ghost-btn" id="seal-suggest-btn" style="font-size:11px">✨ Suggest from conversation</button>

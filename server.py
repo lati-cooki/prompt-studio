@@ -8,6 +8,9 @@ import sqlite3
 import urllib.request
 import urllib.error
 import seal
+import promotion_store
+import promotion_evidence
+import promotion_seal
 
 def _load_dotenv(path=".env"):
     """Load key=value pairs from .env into os.environ (no-op if file absent)."""
@@ -312,6 +315,10 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_error(400)
                 return
             self.serve_file('registry/' + rel)
+        elif self.path == '/api/promotions':
+            self.handle_get_promotions()
+        elif self.path.startswith('/api/promotions/'):
+            self.handle_get_promotion(self.path.removeprefix('/api/promotions/'))
         elif self.path == '/api/threads' or self.path.startswith('/api/threads?'):
             self.handle_get_threads()
         elif self.path.startswith('/api/threads/'):
@@ -403,6 +410,18 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 self.handle_post_prompt_draft(parts[0])
             elif len(parts) == 3 and parts[2] == 'validate':
                 self.handle_post_prompt_validate(parts[0], parts[1])
+            elif len(parts) == 3 and parts[1] == 'promote':
+                self.handle_post_promote(parts[0], parts[2])
+            elif len(parts) == 3 and parts[1] == 'demote':
+                self.handle_post_demote(parts[0], parts[2])
+            else:
+                self.send_error(404)
+        elif self.path.startswith('/api/promotions/'):
+            parts = self.path.removeprefix('/api/promotions/').split('/')
+            if len(parts) == 2 and parts[1] in ('object', 'close', 'waive', 'abort', 'reseal'):
+                self.handle_promotion_action(parts[0], parts[1])
+            elif len(parts) == 4 and parts[1] == 'objections' and parts[3] == 'resolve':
+                self.handle_objection_resolve(parts[0], parts[2])
             else:
                 self.send_error(404)
         elif self.path == '/api/prompts':
@@ -515,6 +534,19 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         if version is None:
             self.send_error(400, "version required")
             return
+        if data.get('status') == 'production':
+            conn = self.get_db()
+            try:
+                row = conn.execute("SELECT status FROM prompts WHERE id=? AND version=?",
+                                   (prompt_id, version)).fetchone()
+            finally:
+                conn.close()
+            if row is not None and row['status'] != 'production':
+                self.send_json(
+                    {"error": "status=production requires the promotion flow",
+                     "use": f"POST /api/prompts/{prompt_id}/promote/{version}"},
+                    status=409)
+                return
         conn = self.get_db()
         try:
             cursor = conn.cursor()
@@ -665,22 +697,160 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         self.send_json({"status": "draft", "id": prompt_id, "version": new_version})
 
     def handle_post_prompt_validate(self, prompt_id, version):
+        # Phase 4: direct production flips are retired — promotion goes through the FCP flow.
+        self.send_json(
+            {"error": "direct validation retired",
+             "use": f"POST /api/prompts/{prompt_id}/promote/{version}"},
+            status=409)
+
+    def _promotion_error(self, e):
+        self.send_json({"error": e.message}, status=e.status)
+
+    def _decided_by(self, conn, prompt_id, version):
+        row = conn.execute("SELECT owner FROM prompts WHERE id=? AND version=?",
+                           (prompt_id, version)).fetchone()
+        return (row["owner"] if row and row["owner"] else "Prompt Studio owner")
+
+    def _seal_promotion(self, conn, promotion, outcome):
+        """Seal a terminal promotion; never raises — failure is recorded, not fatal."""
+        payload = promotion_seal.build_seal_payload(
+            promotion, outcome,
+            self._decided_by(conn, promotion["prompt_id"], promotion["version"]))
+        try:
+            result = seal.seal_decision(payload)
+            return promotion_store.mark_seal_result(
+                conn, promotion["id"], slug=result["slug"],
+                citation_hash=result.get("citationHash"))
+        except (seal.SealError, seal.SealValidationError) as e:
+            msg = getattr(e, "message", None) or str(e)
+            return promotion_store.mark_seal_result(conn, promotion["id"], error=msg)
+
+    def handle_post_promote(self, prompt_id, version):
+        data = self.read_json_body()
+        if data is None:
+            return
+        evidence = data.get("evidence") or promotion_evidence.pin_evidence(prompt_id, version)
         conn = self.get_db()
         try:
-            cursor = conn.cursor()
-            cursor.execute(
-                """UPDATE prompts SET status='production', eval_status='validated',
-                   updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
-                   WHERE id=? AND version=?""",
-                (prompt_id, version)
-            )
-            conn.commit()
-            if cursor.rowcount == 0:
-                self.send_error(404, "Prompt not found")
+            try:
+                p = promotion_store.open_promotion(
+                    conn, prompt_id, version,
+                    window_hours=data.get("window_hours", 24), evidence=evidence)
+            except promotion_store.PromotionError as e:
+                self._promotion_error(e)
                 return
         finally:
             conn.close()
-        self.send_json({"status": "validated", "id": prompt_id, "version": version})
+        self.send_json(p, status=200)
+
+    def handle_get_promotions(self):
+        conn = self.get_db()
+        try:
+            self.send_json(promotion_store.list_promotions(conn))
+        finally:
+            conn.close()
+
+    def handle_get_promotion(self, pid):
+        conn = self.get_db()
+        try:
+            try:
+                self.send_json(promotion_store.get_promotion(conn, pid))
+            except promotion_store.PromotionError as e:
+                self._promotion_error(e)
+        finally:
+            conn.close()
+
+    def handle_promotion_action(self, pid, action):
+        data = self.read_json_body() if action in ('object', 'waive') else {}
+        if data is None:
+            return
+        conn = self.get_db()
+        try:
+            try:
+                if action == 'object':
+                    self.send_json(promotion_store.add_objection(conn, pid, data.get("body")))
+                    return
+                if action == 'close':
+                    p = promotion_store.close_promotion(conn, pid)
+                    self.send_json(self._seal_promotion(conn, p, "promoted"))
+                    return
+                if action == 'waive':
+                    p = promotion_store.waive_promotion(conn, pid, data.get("reason"))
+                    self.send_json(self._seal_promotion(conn, p, "promoted"))
+                    return
+                if action == 'abort':
+                    p = promotion_store.abort_promotion(conn, pid)
+                    self.send_json(self._seal_promotion(conn, p, "aborted"))
+                    return
+                if action == 'reseal':
+                    p = promotion_store.get_promotion(conn, pid)
+                    if p["state"] == "open":
+                        self.send_json({"error": "promotion still open"}, status=409)
+                        return
+                    if p["sealed"]:
+                        self.send_json(p)  # idempotent
+                        return
+                    outcome = "aborted" if p["state"] == "aborted" else "promoted"
+                    self.send_json(self._seal_promotion(conn, p, outcome))
+            except promotion_store.PromotionError as e:
+                self._promotion_error(e)
+        finally:
+            conn.close()
+
+    def handle_objection_resolve(self, pid, oid):
+        data = self.read_json_body()
+        if data is None:
+            return
+        conn = self.get_db()
+        try:
+            try:
+                p = promotion_store.resolve_objection(
+                    conn, pid, oid, data.get("resolution"), data.get("body"))
+            except promotion_store.PromotionError as e:
+                self._promotion_error(e)
+                return
+            if p["state"] == "aborted":  # upheld objection forced the abort — seal it
+                p = self._seal_promotion(conn, p, "aborted")
+            self.send_json(p)
+        finally:
+            conn.close()
+
+    def handle_post_demote(self, prompt_id, version):
+        data = self.read_json_body()
+        if data is None:
+            return
+        reason = (data.get("reason") or "").strip()
+        if not reason:
+            self.send_json({"error": "reason required"}, status=422)
+            return
+        conn = self.get_db()
+        try:
+            row = conn.execute("SELECT status FROM prompts WHERE id=? AND version=?",
+                               (prompt_id, version)).fetchone()
+            if row is None:
+                self.send_error(404, "Prompt not found")
+                return
+            slug_row = conn.execute(
+                """SELECT thread_slug FROM promotions WHERE prompt_id=? AND version=?
+                   AND thread_slug IS NOT NULL ORDER BY id DESC LIMIT 1""",
+                (prompt_id, version)).fetchone()
+            superseded = slug_row["thread_slug"] if slug_row else None
+            conn.execute(
+                """UPDATE prompts SET status='deprecated',
+                   updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=? AND version=?""",
+                (prompt_id, version))
+            conn.commit()
+            payload = promotion_seal.build_demotion_payload(
+                prompt_id, version, reason,
+                self._decided_by(conn, prompt_id, version), superseded_slug=superseded)
+            try:
+                result = seal.seal_decision(payload)
+                self.send_json({"status": "deprecated", "sealed": True, **result})
+            except (seal.SealError, seal.SealValidationError) as e:
+                msg = getattr(e, "message", None) or str(e)
+                self.send_json({"status": "deprecated", "sealed": False, "seal_error": msg})
+        finally:
+            conn.close()
 
     # OpenAI-compatible provider config: provider → (base_url, env_var)
     _OPENAI_COMPAT = {

@@ -156,7 +156,13 @@ class TestPromptDraft(unittest.TestCase):
 
 
 class TestPromptValidate(unittest.TestCase):
-    def _make_db_with_draft(self):
+    """Phase 4: direct validate is retired in favor of the promotion FCP flow
+    (server.handle_post_promote / POST /api/prompts/<id>/promote/<version>).
+    handle_post_prompt_validate now unconditionally returns 409 pointing callers
+    at the promote route — it no longer touches the DB or checks prompt existence."""
+
+    def test_validate_now_returns_409_and_leaves_status_unchanged(self):
+        import server
         import sqlite3
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
@@ -179,82 +185,37 @@ class TestPromptValidate(unittest.TestCase):
                 strftime('%Y-%m-%dT%H:%M:%SZ','now')
             );
         """)
-        return conn
-
-    def test_validate_sets_production_and_validated(self):
-        import server
-        import sqlite3
-        handler = object.__new__(server.PromptStudioHandler)
-        handler.send_json = MagicMock()
-        handler.send_error = MagicMock()
-
-        # Use a file-based temp DB so we can re-query after the handler closes its connection
-        import tempfile, os
-        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
-            db_path = f.name
-        try:
-            setup_conn = sqlite3.connect(db_path)
-            setup_conn.row_factory = sqlite3.Row
-            setup_conn.executescript("""
-                CREATE TABLE prompts (
-                    id TEXT NOT NULL, version TEXT NOT NULL,
-                    status TEXT, tier TEXT, owner TEXT, body TEXT,
-                    use_case TEXT, cost_per_run_usd REAL,
-                    tokens_prompt_body INTEGER, default_model TEXT,
-                    eval_status TEXT, file TEXT, notes TEXT,
-                    composes TEXT, tested_on TEXT,
-                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-                    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-                    PRIMARY KEY (id, version)
-                );
-                INSERT INTO prompts VALUES (
-                    'my_prompt','1.1.0','draft',NULL,NULL,'body',
-                    NULL,NULL,NULL,NULL,'pending',NULL,NULL,NULL,NULL,
-                    strftime('%Y-%m-%dT%H:%M:%SZ','now'),
-                    strftime('%Y-%m-%dT%H:%M:%SZ','now')
-                );
-            """)
-            setup_conn.close()
-
-            handler.get_db = lambda: sqlite3.connect(db_path, detect_types=sqlite3.PARSE_DECLTYPES)
-
-            handler.handle_post_prompt_validate("my_prompt", "1.1.0")
-
-            verify_conn = sqlite3.connect(db_path)
-            verify_conn.row_factory = sqlite3.Row
-            row = verify_conn.execute(
-                "SELECT status, eval_status FROM prompts WHERE id='my_prompt' AND version='1.1.0'"
-            ).fetchone()
-            verify_conn.close()
-            self.assertEqual(row["status"], "production")
-            self.assertEqual(row["eval_status"], "validated")
-        finally:
-            os.unlink(db_path)
-
-    def test_validate_404_for_missing(self):
-        import server
-        import sqlite3
-        conn = sqlite3.connect(":memory:")
-        conn.row_factory = sqlite3.Row
-        conn.executescript("""
-            CREATE TABLE prompts (
-                id TEXT NOT NULL, version TEXT NOT NULL,
-                status TEXT, tier TEXT, owner TEXT, body TEXT,
-                use_case TEXT, cost_per_run_usd REAL,
-                tokens_prompt_body INTEGER, default_model TEXT,
-                eval_status TEXT, file TEXT, notes TEXT,
-                composes TEXT, tested_on TEXT,
-                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-                PRIMARY KEY (id, version)
-            );
-        """)
         handler = object.__new__(server.PromptStudioHandler)
         handler.send_json = MagicMock()
         handler.send_error = MagicMock()
         handler.get_db = lambda: conn
 
+        handler.handle_post_prompt_validate("my_prompt", "1.1.0")
+
+        handler.send_error.assert_not_called()
+        handler.send_json.assert_called_once()
+        body, kwargs = handler.send_json.call_args[0][0], handler.send_json.call_args[1]
+        self.assertEqual(kwargs.get("status"), 409)
+        self.assertIn("promote", body.get("use", ""))
+
+        row = conn.execute(
+            "SELECT status, eval_status FROM prompts WHERE id='my_prompt' AND version='1.1.0'"
+        ).fetchone()
+        self.assertEqual(row["status"], "draft")  # unchanged — no DB write on this route anymore
+        self.assertEqual(row["eval_status"], "pending")
+
+    def test_validate_returns_409_even_for_missing_prompt(self):
+        import server
+        handler = object.__new__(server.PromptStudioHandler)
+        handler.send_json = MagicMock()
+        handler.send_error = MagicMock()
+        # No get_db needed: the retired route never queries the DB, even for a
+        # nonexistent prompt/version — it always 409s toward the promote flow.
+
         handler.handle_post_prompt_validate("ghost", "1.0.0")
 
-        handler.send_error.assert_called_once()
-        self.assertEqual(handler.send_error.call_args[0][0], 404)
+        handler.send_error.assert_not_called()
+        handler.send_json.assert_called_once()
+        body, kwargs = handler.send_json.call_args[0][0], handler.send_json.call_args[1]
+        self.assertEqual(kwargs.get("status"), 409)
+        self.assertIn("promote", body.get("use", ""))

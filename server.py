@@ -172,11 +172,14 @@ def migrate_sessions(conn):
 
 
 def _seed_prompts_from_index(conn):
-    """Import prompts from registry/INDEX.json when the prompts table is empty."""
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM prompts")
-    if cursor.fetchone()[0] > 0:
-        return
+    """Backfill prompts from registry/INDEX.json on every boot.
+
+    INSERT OR IGNORE keyed on (id, version) makes this idempotent: rows the
+    DB already has keep their live state (status flips from the promotion
+    flow win); INDEX entries the DB lacks are added. Runs each startup so a
+    table that diverged from the snapshot converges instead of staying stuck
+    (an early guard skipped seeding entirely once the table was non-empty,
+    which left this DB with 1 of 8 registry prompts)."""
     index_path = os.path.join(os.path.dirname(__file__), "registry", "INDEX.json")
     if not os.path.exists(index_path):
         return
@@ -323,7 +326,7 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         elif self.path == '/api/prompts':
             self.handle_get_prompts()
         elif self.path == '/api/registry':
-            self.serve_file('registry/INDEX.json', 'application/json')
+            self.handle_get_registry()
         elif self.path.startswith('/registry-asset/'):
             rel = self.path[len('/registry-asset/'):]
             if '..' in rel or rel.startswith('/'):
@@ -1040,6 +1043,51 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json(body, status=e.status)
             return
         self.send_json(result, status=200)
+
+    def handle_get_registry(self):
+        """Live registry view — the DB is the source of truth for prompt state.
+
+        Serves the INDEX.json shape (the widget/picker contract) built from the
+        prompts table, so status flips from the promotion FCP flow appear
+        immediately instead of lagging the static snapshot. Header metadata
+        (registry_version, owner, evals, open_questions) still comes from
+        INDEX.json; generated_at becomes the newest DB updated_at."""
+        conn = self.get_db()
+        try:
+            rows = conn.execute(
+                """SELECT id, version, status, tier, use_case, cost_per_run_usd,
+                          tokens_prompt_body, default_model, eval_status, file,
+                          notes, composes, tested_on, updated_at
+                   FROM prompts ORDER BY id, version"""
+            ).fetchall()
+        finally:
+            conn.close()
+        prompts = []
+        latest = None
+        for row in rows:
+            entry = dict(row)
+            for key in ("composes", "tested_on"):
+                try:
+                    entry[key] = json.loads(entry[key]) if entry[key] else []
+                except (ValueError, TypeError):
+                    entry[key] = []
+            updated = entry.pop("updated_at", None)
+            if updated and (latest is None or updated > latest):
+                latest = updated
+            prompts.append(entry)
+        meta = {"registry_version": "?"}
+        try:
+            index_path = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "registry", "INDEX.json")
+            with open(index_path) as f:
+                idx = json.load(f)
+            for key in ("registry_version", "owner", "owner_entity", "evals", "open_questions"):
+                if key in idx:
+                    meta[key] = idx[key]
+        except (OSError, ValueError):
+            pass
+        self.send_json({**meta, "generated_at": latest, "source": "live-db",
+                        "prompts": prompts})
 
     def handle_get_prompts(self):
         conn = self.get_db()

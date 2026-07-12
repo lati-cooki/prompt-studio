@@ -309,3 +309,92 @@ class TestServeSandboxIndex(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRegistryFromDb(unittest.TestCase):
+    """/api/registry serves live DB state, not the static INDEX.json snapshot."""
+
+    def _handler(self):
+        h = MockHandler()
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        schema_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "schema.sql"
+        )
+        with open(schema_path) as f:
+            conn.executescript(f.read())
+        conn.execute(
+            "INSERT INTO prompts (id, version, status, tier, use_case, file, composes, tested_on) "
+            "VALUES ('p1', '1.0.0', 'draft', 'audit', 'testing', 'prompts/p1.md', '[]', '[\"m\"]')"
+        )
+        conn.commit()
+
+        class _SharedConn:
+            """Handlers close per-request; keep the shared test conn alive."""
+            def __init__(self, inner):
+                self._inner = inner
+            def close(self):
+                pass
+            def __getattr__(self, name):
+                return getattr(self._inner, name)
+
+        h.get_db = lambda: _SharedConn(conn)
+        return h, conn
+
+    def test_registry_reflects_live_status(self):
+        h, conn = self._handler()
+        h.path = "/api/registry"
+        h.do_GET()
+        self.assertEqual(h._last_status, 200)
+        entry = [p for p in json.loads(h._body_written)["prompts"] if p["id"] == "p1"][0]
+        self.assertEqual(entry["status"], "draft")
+        conn.execute("UPDATE prompts SET status='production' WHERE id='p1'")
+        conn.commit()
+        h._body_written = b""
+        h.do_GET()
+        entry = [p for p in json.loads(h._body_written)["prompts"] if p["id"] == "p1"][0]
+        self.assertEqual(entry["status"], "production")
+
+    def test_registry_shape_matches_index_contract(self):
+        h, _ = self._handler()
+        h.path = "/api/registry"
+        h.do_GET()
+        data = json.loads(h._body_written)
+        self.assertIn("registry_version", data)
+        self.assertIn("generated_at", data)
+        entry = data["prompts"][0]
+        for key in ("id", "version", "status", "tier", "use_case", "file", "notes",
+                    "cost_per_run_usd", "tokens_prompt_body", "default_model", "eval_status"):
+            self.assertIn(key, entry)
+        self.assertIsInstance(entry["composes"], list)
+        self.assertIsInstance(entry["tested_on"], list)
+        self.assertNotIn("body", entry)  # INDEX contract never exposed bodies
+
+
+class TestSeedBackfill(unittest.TestCase):
+    """Seeding backfills INDEX.json prompts missing from a non-empty table,
+    without overwriting live state on rows that already exist."""
+
+    def test_backfills_missing_prompts_and_preserves_existing_status(self):
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        schema_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "schema.sql"
+        )
+        with open(schema_path) as f:
+            conn.executescript(f.read())
+        # one pre-existing row whose live status differs from INDEX.json
+        conn.execute(
+            "INSERT INTO prompts (id, version, status) "
+            "VALUES ('agent_operational_checklist', '1.0.0', 'production')"
+        )
+        conn.commit()
+        server._seed_prompts_from_index(conn)
+        rows = {(r["id"], r["version"]): r["status"] for r in
+                conn.execute("SELECT id, version, status FROM prompts")}
+        index_prompts = json.load(open(os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "registry", "INDEX.json")))["prompts"]
+        for p in index_prompts:
+            self.assertIn((p["id"], p["version"]), rows)  # every INDEX prompt present
+        self.assertEqual(rows[("agent_operational_checklist", "1.0.0")], "production")  # live wins

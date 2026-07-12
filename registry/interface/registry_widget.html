@@ -389,6 +389,8 @@ async function loadRegistry() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const index = await res.json();
     data = (index.prompts || []).map(mapPrompt);
+    document.getElementById("meta-count").textContent =
+      `${data.length} prompts · updated ${index.generated_at || "?"}`;
     document.getElementById("doc-footer").textContent =
       `Registry v${index.registry_version || "?"} · generated ${index.generated_at || "?"} · ${data.length} prompts`;
     await loadPromotions();

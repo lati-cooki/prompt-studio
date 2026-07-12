@@ -206,8 +206,19 @@ The following decision points require human approval before the agent proceeds a
 
 ## Grade
 
-<!-- A / A- / B+ / B / C / F — fill in after review -->
+A-
 
 ## Notes
+
+Graded 2026-07-12 (Claude, delegated by Troy). Strong systematic execution: all 12
+checklist items covered with per-item verdicts and concrete remediations; Step-0
+arithmetic reconciliation correctly inferred the multi-call architecture from the
+margin math; blockers/HITL/next-actions all actionable. Standout behavior: the
+prompt detected that the directive is a strategy document, not an agent
+description, disclosed the mismatch up front, and audited the implicit agent
+rather than hallucinating compliance. Deductions: one placeholder ("$X per
+session") in HITL gate 2; and the mismatched input means discrimination on a
+purpose-fit agent spec remains undemonstrated — write a real agent-description
+directive before the next eval.
 
 <!-- Reviewer notes -->

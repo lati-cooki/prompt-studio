@@ -50,6 +50,7 @@ class _StubHandler(BaseHTTPRequestHandler):
             "body": json.loads(raw) if raw else None,
             "auth": self.headers.get("Authorization"),
             "content_type": self.headers.get("Content-Type"),
+            "user_agent": self.headers.get("User-Agent"),
         })
         payload = self.state.body
         out = (payload if isinstance(payload, str) else json.dumps(payload)).encode()
@@ -252,6 +253,13 @@ class TestRouting(CloudStoreCase):
         self._respond([])
         cloud_store.list_promotions(None)
         self.assertIsNone(self._last()["auth"])
+
+    def test_sends_custom_user_agent(self):
+        # Cloudflare's edge 403s the default Python-urllib UA, so every
+        # operator->Worker request must send a custom User-Agent.
+        self._respond([])
+        cloud_store.list_promotions(None)
+        self.assertEqual(self._last()["user_agent"], cloud_store.USER_AGENT)
 
 
 # ---------------------------------------------------------------------------

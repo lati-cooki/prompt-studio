@@ -46,6 +46,11 @@ import promotion_store
 # objections._UNSET so server.py's mint_kwargs pass-through works unchanged.
 _UNSET = object()
 
+# Cloudflare's edge returns 403 to requests with the Python-urllib default
+# User-Agent, so every operator->Worker call must send a custom UA. Duplicated
+# from seal.USER_AGENT (not imported) to keep this module stdlib-only.
+USER_AGENT = "clista-operator/1.0"
+
 
 def _base():
     return (os.environ.get("STUDIO_CLOUD_BASE_URL") or "").rstrip("/")
@@ -87,6 +92,7 @@ def _request(method, path, body=None):
         headers["Authorization"] = f"Bearer {token}"
     if data is not None:
         headers["Content-Type"] = "application/json"
+    headers["User-Agent"] = USER_AGENT
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=_timeout()) as resp:

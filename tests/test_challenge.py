@@ -31,7 +31,7 @@ import sys
 import tempfile
 import threading
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import challenge
@@ -46,6 +46,68 @@ CLI = TOOLING and os.path.exists(challenge.PROTOCOL_CLI)
 
 SCHEMA_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "schema.sql")
+
+
+class TestToolingPresence(unittest.TestCase):
+    """Missing tooling must be a LOUD failure, not a silent green skip.
+
+    This studio suite has no tool-less CI runner — it runs on the dev
+    machine, where the challenge feature itself requires node + the protocol
+    tooling at runtime. So: this sentinel FAILS (naming exactly what is
+    missing and how to override) whenever the tooling is absent; the
+    integration classes below still carry skipUnless so a broken environment
+    produces ONE precise failure instead of a cascade of misleading ones."""
+
+    def test_challenge_tooling_available(self):
+        missing = []
+        if not NODE:
+            missing.append(f"node executable '{challenge.NODE}' (set CLISTA_NODE)")
+        for label, path, env in (
+            ("gate template", challenge.GATE_TEMPLATE, "CHALLENGE_GATE_TEMPLATE"),
+            ("run-keys.mjs", challenge.RUN_KEYS, "CLISTA_RUN_KEYS"),
+            ("protocol CLI", challenge.PROTOCOL_CLI, "CLISTA_PROTOCOL_CLI"),
+        ):
+            if not os.path.exists(path):
+                missing.append(f"{label} at {path} (set {env} or CLISTA_PROTOCOL_ROOT)")
+        self.assertFalse(
+            missing,
+            "challenge tooling missing — the integration tests below are "
+            "SKIPPING, which this sentinel refuses to let pass silently:\n  "
+            + "\n  ".join(missing))
+
+
+class TestProtocolRootProbe(unittest.TestCase):
+    """The default protocol root prefers the MAIN checkout once the phase-5
+    tooling has merged there, falling back to the phase5-topology worktree
+    while it exists. The root is all-or-nothing: main's CLI predates T2b
+    until the merge lands, so mixing roots is never allowed."""
+
+    def test_prefers_first_candidate_with_gate_tooling(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bare = os.path.join(tmp, "bare")
+            tooled = os.path.join(tmp, "tooled")
+            os.makedirs(os.path.join(bare, "scripts"))
+            os.makedirs(os.path.join(tooled, "scripts"))
+            for name in ("gate.py", "run-keys.mjs"):
+                with open(os.path.join(tooled, "scripts", name), "w") as f:
+                    f.write("# marker\n")
+            with patch.object(challenge, "_PROTOCOL_ROOT_CANDIDATES", (bare, tooled)):
+                self.assertEqual(challenge._default_protocol_root(), tooled)
+            with patch.object(challenge, "_PROTOCOL_ROOT_CANDIDATES", (tooled, bare)):
+                self.assertEqual(challenge._default_protocol_root(), tooled)
+
+    def test_falls_back_to_first_candidate_when_none_tooled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            a, b = os.path.join(tmp, "a"), os.path.join(tmp, "b")
+            with patch.object(challenge, "_PROTOCOL_ROOT_CANDIDATES", (a, b)):
+                self.assertEqual(challenge._default_protocol_root(), a)
+
+    def test_live_default_root_actually_carries_the_tooling(self):
+        # Whatever the probe picked on this machine must hold the files the
+        # feature shells to — the loud sentinel above depends on it.
+        self.assertTrue(os.path.exists(challenge.GATE_TEMPLATE),
+                        challenge.GATE_TEMPLATE)
+        self.assertTrue(os.path.exists(challenge.RUN_KEYS), challenge.RUN_KEYS)
 
 
 def _memory_db():
@@ -360,6 +422,26 @@ class TestComplete(unittest.TestCase):
             challenge.complete("mystery", "m", "sys", [])
         self.assertEqual(ctx.exception.status, 400)
 
+    def test_anthropic_call_carries_timeout_and_joins_text(self):
+        # A hung completion must never park the daemon worker forever: the
+        # client is constructed with an explicit timeout. Fully mocked SDK —
+        # no live call.
+        fake_sdk = MagicMock()
+        block = MagicMock()
+        block.type = "text"
+        block.text = "hello"
+        fake_sdk.Anthropic.return_value.messages.create.return_value.content = [block]
+        with patch.dict(os.environ, {"ANTHROPIC_API_KEY": "test-key"}), \
+             patch.object(challenge, "anthropic", fake_sdk):
+            out = challenge.complete("anthropic", "claude-sonnet-5", "sys",
+                                     [{"role": "user", "content": "x"}])
+        self.assertEqual(out, "hello")
+        fake_sdk.Anthropic.assert_called_once_with(
+            api_key="test-key", timeout=challenge.COMPLETION_TIMEOUT)
+        create_kwargs = fake_sdk.Anthropic.return_value.messages.create.call_args.kwargs
+        self.assertEqual(create_kwargs["model"], "claude-sonnet-5")
+        self.assertEqual(create_kwargs["system"], "sys")
+
 
 # ── orchestration: fake complete(), REAL gate subprocess ─────────────
 
@@ -540,6 +622,11 @@ class TestGateRefusal(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
     def test_refusal_surfaces_in_job_stream_and_fails_run(self):
+        """A refusal must leave (a) the UI-facing job entry, (b) an IN-LOG
+        GateRejectionRecorded witness — signed, chained, committing to the
+        refused candidate by content hash, never embedding it — per
+        DR-2026-07-12-silent-action-prohibition and the JS harness's
+        witnessRejection (src/gate.js), and (c) a failed run."""
         conn = _memory_db()
         _seed_prompt(conn)
         cfg = challenge.validate_request(conn, _request(rounds=1))
@@ -550,6 +637,8 @@ class TestGateRefusal(unittest.TestCase):
         real_append = challenge.Gate.append
 
         def sabotaged(self, writer, etype, payload):
+            # Refuse the first MAKER turn only; the witness append (and
+            # everything before it) goes through the REAL gate.
             if etype == "PositionTaken":
                 raise challenge.GateRejection("GATE REJECT: writer 'MAKER' not registered")
             return real_append(self, writer, etype, payload)
@@ -569,6 +658,66 @@ class TestGateRefusal(unittest.TestCase):
                           if e["type"] == "GateRejectionRecorded"]
             self.assertEqual(len(rejections), 1)
             self.assertIn("not registered", rejections[0]["summary"])
+
+            # The in-log witness: signed, ORCHESTRATOR-written, in thread.jsonl.
+            run_dir = snap["result"]["run_dir"]
+            with open(os.path.join(run_dir, "thread.jsonl")) as f:
+                gate_events = [json.loads(line) for line in f if line.strip()]
+            witnesses = [e for e in gate_events
+                         if e["type"] == "GateRejectionRecorded"]
+            self.assertEqual(len(witnesses), 1)
+            witness = witnesses[0]
+            self.assertEqual(witness["writer"], "ORCHESTRATOR")
+            self.assertTrue(witness.get("sig"))
+            rejection = witness["payload"]["payload"]["gateRejection"]
+            self.assertEqual(rejection["candidateEventType"], "PositionTaken")
+            self.assertIn("not registered", rejection["reasons"][0]["reason"])
+            self.assertEqual(rejection["rejectedByParticipantId"],
+                             challenge.ROLE_PARTICIPANT["maker"])
+            # Committed by hash, never embedded: the candidate hash matches
+            # the one the job stream reported, and the refused statement's
+            # text is nowhere in the witness.
+            self.assertEqual(rejection["candidateContentHash"],
+                             rejections[0]["hash"])
+            self.assertNotIn("Raise the threshold", json.dumps(witness))
+
+            # The witness is chained into the ClisTa log too (T2b can hold a
+            # later report accountable for it).
+            with open(os.path.join(run_dir, "events.ndjson")) as f:
+                clista = [json.loads(line) for line in f if line.strip()]
+            self.assertEqual(clista[-1]["event_type"], "GateRejectionRecorded")
+            self.assertEqual(clista[-1]["previous_hash"],
+                             clista[-2]["content_hash"])
+            self.assertEqual(snap["result"]["rejectionWitnessed"], True)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_unwitnessable_refusal_is_disclosed_not_forced(self):
+        """When the witness append is itself refused (here: sealed thread),
+        nothing is appended and the job discloses rejectionWitnessed: False —
+        the DR's residual boundary: a gate never corrupts (or force-extends)
+        a log in order to witness a refusal."""
+        tmp = tempfile.mkdtemp(prefix="challenge-sealed-witness-")
+        try:
+            run_dir = os.path.join(tmp, "run")
+            gate = challenge.Gate.create(run_dir)
+            with open(os.path.join(run_dir, "genesis_prompt.md"), "w") as f:
+                f.write("genesis")
+            gate.init(os.path.join(run_dir, "genesis_prompt.md"), "sealed-witness")
+            gate.seal()
+            with open(os.path.join(run_dir, "thread.jsonl")) as f:
+                before = f.read()
+
+            candidate = challenge.make_event(
+                "PositionTaken", "thr_x", challenge.ROLE_PARTICIPANT["maker"],
+                {"position": {"id": "pos_r1", "statement": "s"}})
+            witness = challenge.witness_rejection(
+                gate, "thr_x", [], os.path.join(run_dir, "events.ndjson"),
+                candidate, "GATE REJECT: thread is sealed; append refused")
+            self.assertIsNone(witness)
+            with open(os.path.join(run_dir, "thread.jsonl")) as f:
+                self.assertEqual(f.read(), before)  # nothing appended
+            self.assertFalse(os.path.exists(os.path.join(run_dir, "events.ndjson")))
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

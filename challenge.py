@@ -22,8 +22,9 @@ into <run_dir>/keys with the .pem files at 0600. Private key material is never
 read into this process, never logged, and never present in job snapshots —
 this module only ever handles key file PATHS and public keys.
 
-External tooling paths (post-merge these defaults become the main-checkout
-paths; override via env until then):
+External tooling paths (defaults come from a probe that prefers the MAIN
+monorepo checkout and falls back to the phase5-topology worktree until the
+phase-5 tooling merges — see _default_protocol_root; env overrides supreme):
   CHALLENGE_GATE_TEMPLATE  gate.py template (copied into each run dir — it
                            refuses to run in place from a scripts/ dir)
   CLISTA_RUN_KEYS          run-keys.mjs (keygen/sign/verify; the gate shells
@@ -56,11 +57,33 @@ except ImportError:
 
 STUDIO_ROOT = os.path.dirname(os.path.abspath(__file__))
 
-# Monorepo worktree (read-only reference checkout). Post-merge, point these
-# defaults at the main checkout of the monorepo instead.
-_MONOREPO_PROTOCOL = os.environ.get(
-    "CLISTA_PROTOCOL_ROOT",
-    "/Users/troylatimer/Projects/clista/.claude/worktrees/phase5-topology/packages/protocol")
+# Protocol root candidates, in preference order: the MAIN monorepo checkout
+# (the tooling's post-merge home), then the phase5-topology worktree (its
+# pre-merge home). The probe picks the first root that actually carries the
+# keyed-gate tooling, so the default flips to main automatically once the
+# phase-5 work merges — no code change needed then. CLISTA_PROTOCOL_ROOT (and
+# the per-file env overrides below) remain supreme over the probe.
+_PROTOCOL_ROOT_CANDIDATES = (
+    "/Users/troylatimer/Projects/clista/packages/protocol",
+    "/Users/troylatimer/Projects/clista/.claude/worktrees/phase5-topology/packages/protocol",
+)
+
+
+def _default_protocol_root():
+    """First candidate carrying scripts/gate.py + run-keys.mjs; falls back to
+    the main checkout (first candidate) if none does, so error messages name
+    the post-merge path. The root is ALL-OR-NOTHING — gate, run-keys,
+    anchor-run and the CLI must come from the same tree: main's CLI predates
+    the T2b curation check until the merge lands, so mixing a tooled worktree
+    gate with main's CLI would silently drop a verdict."""
+    for root in _PROTOCOL_ROOT_CANDIDATES:
+        if (os.path.exists(os.path.join(root, "scripts", "gate.py"))
+                and os.path.exists(os.path.join(root, "scripts", "run-keys.mjs"))):
+            return root
+    return _PROTOCOL_ROOT_CANDIDATES[0]
+
+
+_MONOREPO_PROTOCOL = os.environ.get("CLISTA_PROTOCOL_ROOT") or _default_protocol_root()
 
 GATE_TEMPLATE = os.environ.get(
     "CHALLENGE_GATE_TEMPLATE", os.path.join(_MONOREPO_PROTOCOL, "scripts", "gate.py"))
@@ -377,7 +400,9 @@ def complete(provider, model, system, messages):
             raise ChallengeError("ANTHROPIC_API_KEY not configured", status=503)
         if anthropic is None:
             raise ChallengeError("anthropic package not installed", status=503)
-        client = anthropic.Anthropic(api_key=api_key)
+        # Explicit timeout: a hung completion must never park the daemon
+        # worker (and its job) indefinitely.
+        client = anthropic.Anthropic(api_key=api_key, timeout=COMPLETION_TIMEOUT)
         msg = client.messages.create(
             model=model, max_tokens=8096, system=system, messages=messages)
         return "".join(
@@ -777,15 +802,61 @@ def start_job(cfg):
     return job_id
 
 
+def witness_rejection(gate, thread_id, clista_events, events_path, candidate,
+                      reason):
+    """The IN-LOG witness of a gate refusal (DR-2026-07-12-silent-action-
+    prohibition; shape mirrors the JS harness's witnessRejection in
+    packages/protocol/src/gate.js): a gate that refuses an append has shaped
+    the output — the record that isn't there — so the refusal itself becomes
+    a GateRejectionRecorded event, appended through the SAME gate as anything
+    else (ORCHESTRATOR is a registered writer, so an unsealed, unbroken
+    thread accepts it). The rejected candidate is committed to by content
+    hash, NEVER embedded.
+
+    If the witness append is itself refused (sealed thread, broken log), this
+    appends NOTHING and returns None — the gate never force-extends a log in
+    order to witness a refusal; that residual boundary is the DR's, disclosed
+    to the caller as rejectionWitnessed: false rather than hidden.
+
+    Returns the witnessed ClisTa event (also chained into clista_events +
+    events.ndjson, so a later report answers to T2b for it), or None."""
+    rejection = {
+        "id": f"grj_{uuid.uuid4().hex[:8]}",
+        "object": "gateRejection",
+        "threadId": thread_id,
+        "gate": "challenge_run_append",
+        "candidateEventType": candidate["event_type"],
+        "candidateContentHash": candidate["content_hash"],
+        "reasons": [{"reason": reason}],
+        "rejectedByParticipantId": candidate["actor_id"],
+        "rejectedAt": now_iso(),
+    }
+    prev = clista_events[-1]["content_hash"] if clista_events else None
+    ev = make_event("GateRejectionRecorded", thread_id, ORCH_PARTICIPANT,
+                    {"gateRejection": rejection}, previous_hash=prev)
+    try:
+        gate.append("ORCHESTRATOR", "GateRejectionRecorded", ev)
+    except GateRejection:
+        return None
+    clista_events.append(ev)
+    with open(events_path, "a") as f:
+        f.write(json.dumps(ev, ensure_ascii=False) + "\n")
+    return ev
+
+
 def _gate_append_clista(job_id, gate, writer, ev):
     """Append one ClisTa event through the gate (the gate validates before
     appending and signs at append time). A refusal surfaces in the job stream
     as GateRejectionRecorded — witnessed, never swallowed — then fails the
-    run: work the gate refused is unwitnessed and may not be built upon."""
+    run: work the gate refused is unwitnessed and may not be built upon.
+    The IN-LOG witness of the refusal is the caller's duty (see emit /
+    witness_rejection) — this function has no chain state."""
     try:
         gate_hash = gate.append(writer, ev["event_type"], ev)
     except GateRejection as e:
-        job_event(job_id, "GateRejectionRecorded", "GATE", str(e))
+        # The UI-facing entry; the hash names the refused candidate.
+        job_event(job_id, "GateRejectionRecorded", "GATE", str(e),
+                  event_hash=ev["content_hash"])
         raise
     job_event(job_id, ev["event_type"], writer,
               _summary_line(_clista_summary(ev)), event_hash=ev["content_hash"])
@@ -823,7 +894,15 @@ def run_challenge(job_id, cfg):
     def emit(writer, actor, etype, payload):
         prev = clista_events[-1]["content_hash"] if clista_events else None
         ev = make_event(etype, thread_id, actor, payload, previous_hash=prev)
-        _gate_append_clista(job_id, gate, writer, ev)
+        try:
+            _gate_append_clista(job_id, gate, writer, ev)
+        except GateRejection as rejection:
+            # Before the run fails, the refusal gets its in-log witness (or a
+            # disclosed inability to witness — never a forced append).
+            witness = witness_rejection(gate, thread_id, clista_events,
+                                        events_path, ev, str(rejection))
+            _merge_result(job_id, rejectionWitnessed=witness is not None)
+            raise
         clista_events.append(ev)
         # events.ndjson grows with the thread so a mid-run failure leaves a
         # legible partial log beside the gate's thread.jsonl.

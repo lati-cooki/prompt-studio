@@ -676,6 +676,32 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
 .sessions-view { max-width: 720px; margin: 0 auto; padding: 48px 24px; overflow-y: auto; }
 .sessions-view-empty { color: var(--ink-4); font-size: 13px; padding: 16px 0; }
 
+/* ── Challenge Run card (Slice 7) ───────────────────────── */
+#challenge-card { border-top: 1px solid var(--line, #2223); padding: 4px 16px 10px; max-height: 46vh; overflow-y: auto; font-size: 12px; }
+.challenge-card-summary { cursor: pointer; font-weight: 600; padding: 6px 0; }
+.challenge-card-hint { font-weight: 400; color: var(--ink-4); margin-left: 8px; font-size: 11px; }
+.challenge-form { display: flex; flex-direction: column; gap: 8px; padding: 4px 0 8px; }
+.challenge-label { display: block; font-size: 10px; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-4); margin: 4px 0 2px; }
+.challenge-scenario { width: 100%; resize: vertical; font-size: 12px; }
+.challenge-roles { display: flex; gap: 16px; }
+.challenge-role { flex: 1; min-width: 0; }
+.challenge-role-title { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+.challenge-select { width: 100%; font-size: 12px; }
+.challenge-run-row { display: flex; align-items: center; gap: 10px; }
+.challenge-rounds { width: 52px; }
+.challenge-status { color: var(--ink-3); font-size: 12px; }
+.challenge-events { font-family: var(--mono); font-size: 11px; max-height: 160px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.challenge-event-rejected { color: #c0392b; font-weight: 600; }
+.challenge-verdicts { display: flex; gap: 12px; margin: 6px 0; }
+.challenge-verdict { padding: 2px 8px; border-radius: 4px; border: 1px solid var(--line, #2223); }
+.challenge-verdict-pass strong { color: #1e8e3e; }
+.challenge-verdict-fail strong { color: #c0392b; }
+.challenge-fact { font-size: 11px; margin: 2px 0; }
+.challenge-fact code { word-break: break-all; }
+.challenge-error { color: #c0392b; font-size: 12px; margin: 4px 0; }
+.challenge-disclosure { color: var(--ink-4); font-size: 11px; margin: 4px 0; }
+.challenge-raw pre { max-height: 200px; overflow: auto; font-size: 10px; }
+
 /* ── Deliberate declutter ─────────────────────────────────
    The shell sidebar + Home + Sessions views now own the brand, New-session,
    Registry link, and the session list — so hide those duplicates in the rail.
@@ -874,6 +900,11 @@ a.ghost-btn { display: inline-flex; align-items: center; text-decoration: none; 
       <span class="vault-inline-status" id="vault-status"></span>
     </div>
   </div>
+
+  <!-- Challenge Run (Slice 7): witnessed MAKER/CHECKER deliberation through
+       the keyed gate — server-orchestrated; this card only submits and polls.
+       Populated by js/challenge-panel.js; shown in Deliberate only. -->
+  <section id="challenge-card" style="display:none"></section>
 
 </div>
 

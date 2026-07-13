@@ -15,6 +15,7 @@ import {
 import { paneContext } from './seal-extract.js';
 import { createRegistryPanel } from './registry-panel.js';
 import { createModelSelector } from './model-selector.js';
+import { createChallengePanel } from './challenge-panel.js';
 import * as api from './api.js';
 import { resolveView, homeState, promotionMetricsLabel } from './view.js';
 
@@ -73,6 +74,12 @@ const registryPanel = createRegistryPanel({
     refreshSessionList();
   },
 });
+
+// ── Challenge Run card (Slice 7) ───────────────────────
+const $challengeCard = document.getElementById("challenge-card");
+if ($challengeCard) {
+  createChallengePanel({ container: $challengeCard, frontierModels: FRONTIER_MODELS });
+}
 
 // ── Model selector ─────────────────────────────────────
 function buildModelSelector(initialKeys) {
@@ -357,6 +364,9 @@ function showView(raw) {
   $paneContainer.style.display      = isDeliberate ? "" : "none";
   $composer.style.display           = isDeliberate ? "" : "none";
   $registryPanelMount.style.display = isDeliberate ? "" : "none";
+  // Challenge Run card (Slice 7) — Deliberate-only, like the composer.
+  const challengeEl = document.getElementById('challenge-card');
+  if (challengeEl) challengeEl.style.display = isDeliberate ? "" : "none";
   // Embedded views (lazy src on first show)
   $registryFrame.style.display  = isRegistry  ? "block" : "none";
   $decisionsFrame.style.display = isDecisions ? "block" : "none";

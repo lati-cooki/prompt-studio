@@ -12,6 +12,7 @@ import seal
 import promotion_store
 import promotion_evidence
 import promotion_seal
+import writers
 
 def _load_dotenv(path=".env"):
     """Load key=value pairs from .env into os.environ (no-op if file absent)."""
@@ -34,6 +35,7 @@ except ImportError:
     anthropic = None
 
 DB_PATH = os.environ.get("DB_PATH", "prompt_studio.db")
+EVALS_DIR = os.environ.get("EVALS_DIR")  # None -> promotion_evidence default
 PORT = int(os.environ.get("PORT", 8000))
 MAX_BODY_BYTES = 10 * 1024 * 1024  # 10 MB
 THREADHUB_PORT = 8110
@@ -465,6 +467,12 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 self.handle_objection_resolve(parts[0], parts[2])
             else:
                 self.send_error(404)
+        elif self.path.startswith('/api/evals/'):
+            parts = self.path.removeprefix('/api/evals/').split('/')
+            if len(parts) == 2 and parts[1] == 'grade':
+                self.handle_grade_eval(parts[0])
+            else:
+                self.send_error(404)
         elif self.path == '/api/prompts':
             self.handle_post_prompts()
         elif self.path == '/api/chat':
@@ -758,16 +766,44 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                            (prompt_id, version)).fetchone()
         return (row["owner"] if row and row["owner"] else "Prompt Studio owner")
 
+    def _writers_for_promotion(self, conn, promotion):
+        """Resolve the per-record writer mapping for a promotion seal
+        (DR-phase5-topology 5.2: evidence author = grader, default = operator).
+
+        DB-lookup-only — the request path never mints identities. Until the
+        operator writer has been provisioned (writers.ensure_writer, run
+        deliberately, not mid-request), returns (None, legacy decidedBy) so the
+        seal falls back to the shared studio author instead of failing."""
+        operator = writers.get_writer(conn, "operator")
+        if operator is None:
+            return None, self._decided_by(
+                conn, promotion["prompt_id"], promotion["version"])
+        decider = writers.get_writer(
+            conn, promotion.get("resolved_by") or "operator") or operator
+        writer_map = {"default": operator["threadhub_id"],
+                      "claim": decider["threadhub_id"]}
+        evidence = promotion.get("evidence")
+        if isinstance(evidence, dict) and evidence.get("graded_by"):
+            grader = writers.get_writer(conn, evidence["graded_by"])
+            if grader:  # unknown grader -> default author, absence not faked
+                writer_map["evidence"] = grader["threadhub_id"]
+        objection_ids = []
+        for o in promotion.get("objections", []):
+            ow = writers.get_writer(conn, o.get("author_writer") or "operator") or operator
+            objection_ids.append(ow["threadhub_id"])
+        if objection_ids:
+            writer_map["objections"] = objection_ids
+        return writer_map, decider
+
     def _seal_promotion(self, conn, promotion, outcome):
         """Seal a terminal promotion; never raises — failure is recorded, not fatal.
         Payload construction lives inside the try too: malformed stored evidence
         (or anything else about this promotion) must record a seal_error, never
         crash the request or leave the promotion permanently unresealable."""
         try:
-            payload = promotion_seal.build_seal_payload(
-                promotion, outcome,
-                self._decided_by(conn, promotion["prompt_id"], promotion["version"]))
-            result = seal.seal_decision(payload)
+            writer_map, decided_by = self._writers_for_promotion(conn, promotion)
+            payload = promotion_seal.build_seal_payload(promotion, outcome, decided_by)
+            result = seal.seal_decision(payload, writers=writer_map)
             return promotion_store.mark_seal_result(
                 conn, promotion["id"], slug=result["slug"],
                 citation_hash=result.get("citationHash"))
@@ -883,6 +919,42 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json(p)
         finally:
             conn.close()
+
+    def handle_grade_eval(self, eval_id):
+        """POST /api/evals/<eval_id>/grade {grade, notes, writer} — grading is
+        an act with an actor. The writer name is resolved (minting its custodial
+        identity if this is its first act) BEFORE anything is stamped."""
+        if not is_safe_slug(eval_id):
+            self.send_error(400, "Invalid eval id")
+            return
+        data = self.read_json_body()
+        if data is None:
+            return
+        grade = (data.get("grade") or "").strip()
+        if not grade:
+            self.send_json({"error": "grade required"}, status=422)
+            return
+        writer_name = (data.get("writer") or "operator").strip()
+        conn = self.get_db()
+        try:
+            writer = writers.ensure_writer(conn, writer_name)
+        except writers.WriterError as e:
+            self.send_json({"error": e.message}, status=e.status)
+            return
+        except seal.SealError as e:
+            body = {"error": e.message}
+            body.update(e.extra)
+            self.send_json(body, status=e.status)
+            return
+        finally:
+            conn.close()
+        try:
+            result = promotion_evidence.grade_eval(
+                eval_id, grade, data.get("notes"), writer["name"], evals_dir=EVALS_DIR)
+        except promotion_evidence.GradeError as e:
+            self.send_json({"error": e.message}, status=e.status)
+            return
+        self.send_json(result, status=200)
 
     def handle_post_demote(self, prompt_id, version):
         data = self.read_json_body()

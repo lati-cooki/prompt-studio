@@ -289,30 +289,67 @@ class TokenInvalid(Exception):
     """Raised for EVERY token-check failure on /object/* paths. Routes map
     this to one byte-identical generic 404 — deliberately no detail: an
     outsider probing tokens must not learn whether one exists, is revoked,
-    is exhausted, is expired, or belongs to a closed promotion."""
+    is exhausted, is expired, or belongs to a closed promotion.
+
+    Carries reason_code and token_id for the LOCAL refusal audit only
+    (object_refusals) — the prober-visible response never varies with them.
+    token_id is resolved only when the token was valid enough to identify
+    (its hash matched a stored row)."""
+
+    def __init__(self, reason_code="unknown", token_id=None):
+        super().__init__(reason_code)
+        self.reason_code = reason_code
+        self.token_id = token_id
+
+
+# A row shaped like fcp_tokens for the unknown-token path: validation runs
+# the SAME work over it (hash comparison, flag checks, promotion lookup)
+# instead of returning early. Its hash can never equal a real sha256 hex
+# digest and promotion_id -1 can never exist.
+_DUMMY_TOKEN = {
+    "id": None, "token_hash": "!" * 64, "invitee_label": None,
+    "revoked": 0, "uses": 0, "use_limit": 1,
+    "expires_at": "9999-12-31T23:59:59Z", "promotion_id": -1,
+}
 
 
 def validate_token(conn, raw):
     """Full validation for the page and filing paths. Returns
-    (token_row_dict, promotion_dict) or raises TokenInvalid."""
+    (token_row_dict, promotion_dict) or raises TokenInvalid.
+
+    TIMING NOTE (Task 13): perfect timing invariance is not achievable in
+    Python (allocation, dict handling, sqlite plan variance all leak a
+    little), but the gross channel is eliminated: EVERY failure mode
+    computes the token hash, runs the token lookup AND the promotion
+    lookup (fetch-then-evaluate, no early return between queries — the
+    unknown-token case runs them over a dummy row), and compares hashes
+    with hmac.compare_digest. No unknown-token fast path vs known-token
+    slow path."""
     ensure_tokens_table(conn)
+    supplied = hash_token(raw or "")
     row = conn.execute("SELECT * FROM fcp_tokens WHERE token_hash=?",
-                       (hash_token(raw or ""),)).fetchone()
-    if row is None:
-        raise TokenInvalid()
-    token = dict(row)
-    if token["revoked"]:
-        raise TokenInvalid()
-    if token["uses"] >= token["use_limit"]:
-        raise TokenInvalid()
-    if _iso(_now()) >= token["expires_at"]:  # window-close snapshot
-        raise TokenInvalid()
+                       (supplied,)).fetchone()
+    token = dict(row) if row is not None else dict(_DUMMY_TOKEN)
+    # fetch everything first, evaluate at the end
+    hash_ok = hmac.compare_digest(token["token_hash"], supplied)
+    revoked = bool(token["revoked"])
+    exhausted = token["uses"] >= token["use_limit"]
+    expired = _iso(_now()) >= token["expires_at"]  # window-close snapshot
     try:
         promotion = promotion_store.get_promotion(conn, token["promotion_id"])
     except promotion_store.PromotionError:
-        raise TokenInvalid()
-    if promotion["state"] != promotion_store.OPEN:
-        raise TokenInvalid()
+        promotion = None
+    not_open = promotion is None or promotion["state"] != promotion_store.OPEN
+    if not hash_ok:
+        raise TokenInvalid("unknown")
+    if revoked:
+        raise TokenInvalid("revoked", token["id"])
+    if exhausted:
+        raise TokenInvalid("exhausted", token["id"])
+    if expired:
+        raise TokenInvalid("expired", token["id"])
+    if not_open:
+        raise TokenInvalid("closed", token["id"])
     return token, promotion
 
 
@@ -429,25 +466,36 @@ def _validate_token_for_status(conn, raw, oid):
     (record hashes, thread slug, verify URLs — never contact data);
     revocation kills future FILING (validate_token, unchanged), not the
     DR 5.6 disclosure guarantee for already-filed objections — an operator
-    action must not silently sever an objector from their receipt."""
+    action must not silently sever an objector from their receipt.
+
+    TIMING NOTE (Task 13): same normalization as validate_token — every
+    failure mode computes the hash, runs the token lookup AND the objection
+    lookup (a dummy row/sentinel oid keeps the work uniform; perfect
+    invariance is not achievable in Python), constant-time hash compare."""
     ensure_tokens_table(conn)
+    supplied = hash_token(raw or "")
     row = conn.execute("SELECT * FROM fcp_tokens WHERE token_hash=?",
-                       (hash_token(raw or ""),)).fetchone()
-    if row is None:
-        raise TokenInvalid()
-    token = dict(row)
+                       (supplied,)).fetchone()
+    token = dict(row) if row is not None else dict(_DUMMY_TOKEN)
+    hash_ok = hmac.compare_digest(token["token_hash"], supplied)
     # deliberately NO revoked check here — see the policy note above
     try:
-        oid = int(oid)
+        oid_int = int(oid)
+        oid_ok = True
     except (TypeError, ValueError):
-        raise TokenInvalid()
+        oid_int, oid_ok = -1, False  # sentinel keeps the lookup running
     obj = conn.execute("SELECT * FROM promotion_objections WHERE id=?",
-                       (oid,)).fetchone()
-    if obj is None:
-        raise TokenInvalid()
-    obj = dict(obj)
-    if obj.get("token_id") is None or int(obj["token_id"]) != token["id"]:
-        raise TokenInvalid()  # a token reads only its own objections
+                       (oid_int,)).fetchone()
+    obj = dict(obj) if obj is not None else None
+    owns = (obj is not None and obj.get("token_id") is not None
+            and token["id"] is not None
+            and int(obj["token_id"]) == token["id"])
+    if not hash_ok:
+        raise TokenInvalid("unknown")
+    if not oid_ok:
+        raise TokenInvalid("malformed", token["id"])
+    if not owns:  # missing objection or another token's objection
+        raise TokenInvalid("unknown", token["id"])
     return token, obj
 
 
@@ -479,7 +527,7 @@ def objection_status(conn, raw, oid):
     try:
         promotion = promotion_store.get_promotion(conn, obj["promotion_id"])
     except promotion_store.PromotionError:
-        raise TokenInvalid()
+        raise TokenInvalid("unknown", token["id"])
     base = {
         "objection_id": obj["id"],
         "body_hash": "sha256:"

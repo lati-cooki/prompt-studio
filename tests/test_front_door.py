@@ -455,5 +455,100 @@ class TestRateLimiter(FrontDoorCase):
         self.assertEqual(h._last_status, 200)
 
 
+# ---------------------------------------------------------------------------
+# Deliverable 5 — timing-channel normalization: uniform work per failure
+# mode (fetch-then-evaluate, constant-time hash comparison, no
+# unknown-token fast path). Perfect timing invariance is not achievable in
+# Python; these tests pin the STRUCTURAL property instead of wall clocks.
+
+
+class _TracingConn:
+    """Proxy conn recording every SQL statement executed through it."""
+
+    def __init__(self, conn):
+        self._conn = conn
+        self.statements = []
+
+    def execute(self, sql, *args):
+        self.statements.append(" ".join(sql.split()))
+        return self._conn.execute(sql, *args)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+class TestTimingNormalization(FrontDoorCase):
+    def _failure_tokens(self):
+        """(name, raw) for every distinguishable validate_token failure."""
+        p = self._open_promotion()
+        out = [("unknown", "not-a-token")]
+        for name, sabotage in (
+            ("revoked", "UPDATE fcp_tokens SET revoked=1 WHERE id=?"),
+            ("exhausted", "UPDATE fcp_tokens SET uses=use_limit WHERE id=?"),
+            ("expired",
+             "UPDATE fcp_tokens SET expires_at='2000-01-01T00:00:00Z' WHERE id=?"),
+        ):
+            minted = self._mint(p["id"])._json()
+            self.anchor.execute(sabotage, (minted["token_id"],))
+            self.anchor.commit()
+            out.append((name, minted["token"]))
+        closed = self._mint(p["id"])._json()
+        self.anchor.execute("UPDATE promotions SET state='aborted' WHERE id=?",
+                            (p["id"],))
+        self.anchor.commit()
+        out.append(("closed", closed["token"]))
+        return out
+
+    def test_no_unknown_token_fast_path(self):
+        # EVERY failure mode — the unknown token included — runs the token
+        # lookup AND the promotion lookup: no early return between queries.
+        for name, raw in self._failure_tokens():
+            tracing = _TracingConn(self.anchor)
+            with self.assertRaises(objections.TokenInvalid, msg=name):
+                objections.validate_token(tracing, raw)
+            joined = "\n".join(tracing.statements)
+            self.assertIn("FROM fcp_tokens", joined, name)
+            self.assertIn("FROM promotions", joined, name)
+
+    def test_hash_comparison_is_constant_time(self):
+        import inspect
+        src = inspect.getsource(objections.validate_token)
+        self.assertIn("compare_digest", src)
+        src_status = inspect.getsource(objections._validate_token_for_status)
+        self.assertIn("compare_digest", src_status)
+
+    def test_status_route_no_fast_path_either(self):
+        p, minted = self._minted()
+        h, _ = self._file(minted["token"])
+        oid = h._json()["objection_id"]
+        # unknown token, malformed oid, foreign objection: all run the token
+        # lookup AND the objection lookup
+        for name, raw, o in (("unknown", "bogus", oid),
+                             ("malformed-oid", minted["token"], "abc"),
+                             ("foreign", minted["token"], oid + 99)):
+            tracing = _TracingConn(self.anchor)
+            with self.assertRaises(objections.TokenInvalid, msg=name):
+                objections._validate_token_for_status(tracing, raw, o)
+            joined = "\n".join(tracing.statements)
+            self.assertIn("FROM fcp_tokens", joined, name)
+            self.assertIn("FROM promotion_objections", joined, name)
+
+    def test_oracle_bodies_still_byte_identical_with_limiter_in_place(self):
+        # The extended oracle set-test: page + API + status failure bodies
+        # each collapse to ONE byte sequence, with the limiter and the
+        # refusal audit live on the path.
+        page_bodies, api_bodies = set(), set()
+        for i, (name, raw) in enumerate(self._failure_tokens()):
+            h = self._get_page(raw)
+            self.assertEqual(h._last_status, 404, name)
+            page_bodies.add(h._body_written)
+            h = self._post_objection(raw, {"body": "x", "contact": "a@b"},
+                                     ip=f"203.0.113.{100 + i}")
+            self.assertEqual(h._last_status, 404, name)
+            api_bodies.add(h._body_written)
+        self.assertEqual(len(page_bodies), 1)
+        self.assertEqual(len(api_bodies), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

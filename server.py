@@ -1673,8 +1673,14 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             conn.close()
         self.send_raw_json(result if result else "[]")
 
+class StudioTCPServer(socketserver.TCPServer):
+    """TIME_WAIT hygiene (Task 13): allow_reuse_address so a restart can
+    rebind the port immediately instead of failing on lingering sockets."""
+    allow_reuse_address = True
+
+
 if __name__ == '__main__':
     init_db()
-    with socketserver.TCPServer(("", PORT), PromptStudioHandler) as httpd:
+    with StudioTCPServer(("", PORT), PromptStudioHandler) as httpd:
         print(f"Serving at port {PORT}")
         httpd.serve_forever()

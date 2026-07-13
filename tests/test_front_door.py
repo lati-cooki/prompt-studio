@@ -748,5 +748,17 @@ class TestRefusalSummaryRoute(FrontDoorCase):
                              objections.GENERIC_404_HTML.encode("utf-8"))
 
 
+# ---------------------------------------------------------------------------
+# Deliverable 7 — TIME_WAIT hygiene on the server class
+
+
+class TestServerClass(unittest.TestCase):
+    def test_allow_reuse_address(self):
+        import socketserver
+        self.assertTrue(issubclass(server.StudioTCPServer,
+                                   socketserver.TCPServer))
+        self.assertTrue(server.StudioTCPServer.allow_reuse_address)
+
+
 if __name__ == "__main__":
     unittest.main()

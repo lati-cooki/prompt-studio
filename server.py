@@ -33,6 +33,7 @@ _load_dotenv()
 import anchors
 import challenge
 import objections
+import publication
 import seal
 import promotion_store
 import promotion_evidence
@@ -118,12 +119,15 @@ def migrate_actor_columns(conn):
     through promotions and objections. Guarded pragma-table_info ALTERs —
     idempotent, and a no-op on DBs that don't have the tables yet (schema.sql
     creates them with these columns included). Pre-migration rows keep NULL:
-    the historical actor is unknown, not backfilled."""
+    the historical actor is unknown, not backfilled.
+
+    Task 15 rides the same guarded mechanism: promotions.deliberation_slug
+    (nullable hub slug of the deliberation thread the promotion cites)."""
     def _cols(table):
         return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
 
     additions = {
-        "promotions": ("opened_by", "resolved_by"),
+        "promotions": ("opened_by", "resolved_by", "deliberation_slug"),
         "promotion_objections": ("author_writer", "resolved_by", "channel",
                                  "token_id", "sealed_record_hash"),
     }
@@ -479,6 +483,8 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             rest = self.path[len('/api/threads/'):].split('?', 1)[0]
             if rest.endswith('/verify'):
                 self.handle_get_thread_verify(rest[:-len('/verify')])
+            elif rest.endswith('/publication'):
+                self.handle_get_thread_publication(rest[:-len('/publication')])
             else:
                 self.handle_get_thread(rest)
         elif self.path.split('?', 1)[0] == '/api/object-refusals':
@@ -598,6 +604,12 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             self.handle_post_challenge()
         elif self.path == '/api/threads/seal':
             self.handle_seal()
+        elif self.path.startswith('/api/threads/'):
+            parts = self.path.removeprefix('/api/threads/').split('?', 1)[0].split('/')
+            if len(parts) == 2 and parts[1] in ('publish', 'unpublish'):
+                self.handle_thread_publish(parts[0], parts[1])
+            else:
+                self.send_error(404)
         elif self.path.startswith('/api/object/'):
             self.handle_object_post(self.path.removeprefix('/api/object/'))
         else:
@@ -1002,12 +1014,20 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         except (TypeError, ValueError):
             self.send_json({"error": "window_hours must be numeric"}, status=422)
             return
+        # Task 15: optional association with the deliberation thread this
+        # promotion cites (hub slug; nullable).
+        deliberation_slug = data.get("deliberation_slug")
+        if deliberation_slug is not None and not is_safe_slug(deliberation_slug):
+            self.send_json({"error": "deliberation_slug must be a safe slug"},
+                           status=422)
+            return
         conn = self.get_db()
         try:
             try:
                 p = promotion_store.open_promotion(
                     conn, prompt_id, version,
-                    window_hours=window_hours, evidence=evidence)
+                    window_hours=window_hours, evidence=evidence,
+                    deliberation_slug=deliberation_slug)
             except promotion_store.PromotionError as e:
                 self._promotion_error(e)
                 return
@@ -1193,7 +1213,13 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 return
         finally:
             conn.close()
-        body = objections.render_object_page(promotion, token, raw).encode('utf-8')
+        # Task 15: the doorstep link — None unless a deliberation thread is
+        # associated AND effectively published (deliberation_link fails
+        # closed; an unpublished association renders NOTHING).
+        body = objections.render_object_page(
+            promotion, token, raw,
+            deliberation_url=objections.deliberation_link(promotion),
+        ).encode('utf-8')
         self.send_response(200)
         self.send_header('Content-Type', 'text/html; charset=utf-8')
         self.send_header('Content-Length', str(len(body)))
@@ -1298,13 +1324,26 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         data = self.read_json_body()
         if data is None:
             return
+        mint_kwargs = {}
+        if "deliberation_slug" in data:
+            # Task 15: mint-time override of the promotion's deliberation
+            # association. Explicit null clears; absent leaves it alone.
+            d_slug = data["deliberation_slug"]
+            if d_slug is not None and not is_safe_slug(d_slug):
+                self.send_json(
+                    {"error": "deliberation_slug must be a safe slug "
+                              "(or null to clear the association)"},
+                    status=422)
+                return
+            mint_kwargs["deliberation_slug"] = d_slug
         conn = self.get_db()
         try:
             try:
                 minted = objections.mint_token(
                     conn, pid,
                     invitee_label=data.get("invitee_label"),
-                    use_limit=data.get("use_limit", 1))
+                    use_limit=data.get("use_limit", 1),
+                    **mint_kwargs)
             except promotion_store.PromotionError as e:
                 self._promotion_error(e)
                 return
@@ -1315,6 +1354,15 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         # when configured, the local bind otherwise.
         base = objections.PUBLIC_BASE_URL or f"http://localhost:{PORT}"
         minted["url"] = f"{base}{minted.pop('url_path')}"
+        # Task 15: the doorstep link rides the mint response — ONLY when a
+        # deliberation thread is associated AND effectively published on
+        # the hub (fail closed: no dead links in an invitation email, no
+        # unpublished-slug leakage beyond the operator surface).
+        d_slug = minted.get("deliberation_slug")
+        if d_slug and publication.is_published(d_slug):
+            hub = (objections.THREADHUB_PUBLIC_BASE_URL
+                   or f"http://localhost:{seal.THREADHUB_PORT}")
+            minted["deliberation_url"] = f"{hub}/t/{d_slug}/view"
         self.send_json(minted)
 
     def handle_token_revoke(self, pid, token_id):
@@ -1582,6 +1630,72 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json({"error": "unknown challenge job"}, status=404)
             return
         self.send_json(snapshot)
+
+    # ── Task 15: publication as an operator-authored witnessed act ────────
+
+    def handle_get_thread_publication(self, slug):
+        """GET /api/threads/<slug>/publication — the thread's effective
+        publication state, read live from the hub (the record is the state;
+        there is no local flag). Feeds the Threads view's badge/toggle."""
+        if self._reject_bad_slug(slug):
+            return
+        try:
+            self.send_json(publication.publication_state(slug))
+        except publication.PublicationError as e:
+            body = {"error": e.message}
+            body.update(e.extra)
+            self.send_json(body, status=e.status)
+
+    def handle_thread_publish(self, slug, verb):
+        """POST /api/threads/<slug>/publish|unpublish — append the
+        ThreadPublished / ThreadPublicationRevoked act (DR-2026-07-13
+        rule 2) to the hub thread via the existing record-append path,
+        authored by the OPERATOR writer identity. Publication is an act
+        with an actor: refuses 409 when the operator writer is not
+        provisioned rather than falling back to the legacy shared studio
+        author. Idempotent — the effective state is read from the hub
+        first; a no-op appends nothing and says so. Operator-auth'd and
+        public-mode-walled by construction (_front_door gates every POST).
+
+        Refusal-era audit trail: every act (and no-op) logs to the server
+        log with actor + slug — no new table; the hub record IS the
+        permanent witness."""
+        if self._reject_bad_slug(slug):
+            return
+        action = "publish" if verb == "publish" else "revoke"
+        conn = self.get_db()
+        try:
+            writers.ensure_table(conn)
+            operator = writers.get_writer(conn, "operator")
+        finally:
+            conn.close()
+        if operator is None:
+            self.send_json(
+                {"error": "operator writer is not provisioned — publication "
+                          "is an act with an actor, and it must not fall "
+                          "back to the shared studio author (DR 5.2). "
+                          "Provision it first: "
+                          "writers.ensure_writer(conn, 'operator')"},
+                status=409)
+            return
+        try:
+            result = publication.set_publication(slug, action, operator)
+        except publication.PublicationError as e:
+            body = {"error": e.message}
+            body.update(e.extra)
+            self.send_json(body, status=e.status)
+            return
+        except seal.SealError as e:
+            body = {"error": e.message}
+            body.update(e.extra)
+            self.send_json(body, status=e.status)
+            return
+        logging.info(
+            "publication act: %s thread '%s' by writer 'operator' (%s) — %s",
+            verb, slug, operator["threadhub_id"],
+            (f"appended seq {result['seq']} {result['record_hash']}"
+             if result["changed"] else result["note"]))
+        self.send_json(result)
 
     def handle_seal(self):
         data = self.read_json_body()

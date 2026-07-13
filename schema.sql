@@ -68,7 +68,10 @@ CREATE TABLE IF NOT EXISTS promotions (
     seal_error TEXT,
     waive_reason TEXT,
     opened_by TEXT,
-    resolved_by TEXT
+    resolved_by TEXT,
+    -- Task 15 (record-is-the-interface): hub slug of the deliberation
+    -- thread this promotion cites; nullable — association is optional.
+    deliberation_slug TEXT
 );
 
 CREATE TABLE IF NOT EXISTS promotion_objections (

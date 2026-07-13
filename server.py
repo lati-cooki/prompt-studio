@@ -10,6 +10,7 @@ import urllib.request
 import urllib.error
 import urllib.parse
 import anchors
+import challenge
 import objections
 import seal
 import promotion_store
@@ -367,6 +368,8 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_error(400)
                 return
             self.serve_file('registry/' + rel)
+        elif self.path.startswith('/api/challenge/'):
+            self.handle_get_challenge(self.path.removeprefix('/api/challenge/').split('?', 1)[0])
         elif self.path == '/api/promotions':
             self.handle_get_promotions()
         elif self.path.split('?', 1)[0] == '/api/promotions/metrics':
@@ -492,6 +495,8 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             self.handle_post_prompts()
         elif self.path == '/api/chat':
             self.handle_post_chat()
+        elif self.path == '/api/challenge':
+            self.handle_post_challenge()
         elif self.path == '/api/threads/seal':
             self.handle_seal()
         elif self.path.startswith('/api/object/'):
@@ -1333,6 +1338,54 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(f"data: {error_chunk}\n\n".encode())
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
+
+    # ── Slice 7: the Challenge Run (challenge.py owns the orchestration) ──
+
+    def handle_post_challenge(self):
+        """POST /api/challenge — validate fail-closed (only production prompts
+        with a sealed promotion thread are eligible as role system prompts;
+        anything else is a 409, never inlined silently), then spawn the run on
+        a daemon worker thread and return {job_id} immediately. This handler
+        stays quick — the single-threaded TCPServer must never wait on a model
+        call; the UI polls GET /api/challenge/<job_id>."""
+        data = self.read_json_body()
+        if data is None:
+            return
+        conn = self.get_db()
+        try:
+            try:
+                cfg = challenge.validate_request(conn, data)
+            except challenge.ChallengeError as e:
+                body = {"error": e.message}
+                body.update(e.extra)
+                self.send_json(body, status=e.status)
+                return
+        finally:
+            conn.close()
+        job_id = challenge.start_job(cfg)
+        self.send_json({"job_id": job_id}, status=202)
+
+    def handle_get_challenge(self, rest):
+        """GET /api/challenge/demo — the built-in fraud-threshold scenario.
+        GET /api/challenge/<job_id> — the polled job snapshot (status, stage,
+        event stream including any GateRejectionRecorded, result, error)."""
+        if rest == 'demo':
+            self.send_json({
+                "scenario": challenge.DEMO_SCENARIO,
+                "source": challenge.DEMO_SCENARIO_SOURCE,
+                "defaults": {
+                    "provider": challenge.DEFAULT_PROVIDER,
+                    "model": challenge.DEFAULT_MODEL,
+                    "rounds": challenge.DEFAULT_ROUNDS,
+                    "max_rounds": challenge.MAX_ROUNDS,
+                },
+            })
+            return
+        snapshot = challenge.get_job(rest)
+        if snapshot is None:
+            self.send_json({"error": "unknown challenge job"}, status=404)
+            return
+        self.send_json(snapshot)
 
     def handle_seal(self):
         data = self.read_json_body()

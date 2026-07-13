@@ -8,3 +8,6 @@ prompt_studio.db
 .superpowers/
 .seal_author_id
 .worktrees/
+# Challenge Run working artifacts (per-run keys, thread.jsonl, receipts) —
+# the durable testimony is the hub thread + the studio ANCHORS.md row.
+challenge_runs/

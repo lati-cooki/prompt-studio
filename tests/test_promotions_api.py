@@ -91,6 +91,14 @@ class PromotionApiTestCase(unittest.TestCase):
             "INSERT INTO prompts (id, version, status) VALUES ('p1', '1.0.0', 'draft')"
         )
         self.anchor.commit()
+        # External anchoring is unit-tested in tests/test_anchors.py; stub it
+        # here so API tests never run git and never touch the live hub.
+        # Tests that assert on anchoring override self.anchor_seal.
+        anchor_patcher = patch(
+            "anchors.anchor_seal",
+            return_value={"anchored": True, "anchor_pushed": True})
+        self.anchor_seal = anchor_patcher.start()
+        self.addCleanup(anchor_patcher.stop)
 
     def tearDown(self):
         self.anchor.close()
@@ -343,6 +351,140 @@ class TestDemote(PromotionApiTestCase):
         mock_seal.assert_not_called()
         row = self._prompt_row()
         self.assertEqual(row["status"], "draft")  # unchanged
+
+
+class TestAnchorWiring(PromotionApiTestCase):
+    """Every successful seal — promotion close/abort and demote — must attempt
+    an anchor and surface anchored/anchor_error/anchor_pushed/anchor_push_error
+    in the API response. Anchor failure never unwinds a seal."""
+
+    def _close(self, pid):
+        h = self._h()
+        h.path = f"/api/promotions/{pid}/close"
+        h._set_body(b"")
+        h.do_POST()
+        return h
+
+    def test_close_response_carries_anchor_fields(self):
+        p = self._open_promotion(window_hours=0)
+        with patch("seal.seal_decision", return_value={"slug": "s", "citationHash": "h"}):
+            h = self._close(p["id"])
+        result = h._json()
+        self.assertEqual(result["sealed"], 1)
+        self.assertEqual(result["anchored"], True)
+        self.assertEqual(result["anchor_pushed"], True)
+        self.anchor_seal.assert_called_once_with("s")
+
+    def test_close_anchor_failure_is_loud_and_seal_stands(self):
+        p = self._open_promotion(window_hours=0)
+        self.anchor_seal.return_value = {
+            "anchored": False, "anchor_error": "git commit failed: no user.email"}
+        with patch("seal.seal_decision", return_value={"slug": "s", "citationHash": "h"}):
+            h = self._close(p["id"])
+        result = h._json()
+        self.assertEqual(result["sealed"], 1)          # seal never unwound
+        self.assertEqual(result["thread_slug"], "s")
+        self.assertEqual(result["anchored"], False)
+        self.assertIn("anchor_error", result)
+        self.assertNotIn("seal_error", result["anchor_error"])  # distinct fields
+        row = self._prompt_row()
+        self.assertEqual(row["status"], "production")  # flip survives anchor failure
+
+    def test_close_push_failure_reported_distinctly(self):
+        p = self._open_promotion(window_hours=0)
+        self.anchor_seal.return_value = {
+            "anchored": True, "anchor_pushed": False,
+            "anchor_push_error": "git push failed: offline"}
+        with patch("seal.seal_decision", return_value={"slug": "s", "citationHash": "h"}):
+            h = self._close(p["id"])
+        result = h._json()
+        self.assertEqual(result["sealed"], 1)
+        self.assertEqual(result["anchored"], True)
+        self.assertEqual(result["anchor_pushed"], False)
+        self.assertIn("anchor_push_error", result)
+
+    def test_seal_failure_never_anchors(self):
+        p = self._open_promotion(window_hours=0)
+        with patch("seal.seal_decision",
+                   side_effect=seal.SealError("ThreadHub is not reachable")):
+            h = self._close(p["id"])
+        result = h._json()
+        self.assertEqual(result["sealed"], 0)
+        self.anchor_seal.assert_not_called()
+
+    def test_upheld_objection_abort_seal_is_anchored(self):
+        p = self._open_promotion(window_hours=24)
+        pid = p["id"]
+        h = self._h()
+        h.path = f"/api/promotions/{pid}/object"
+        h._set_body(json.dumps({"body": "coverage gap"}).encode())
+        h.do_POST()
+        oid = h._json()["id"]
+        with patch("seal.seal_decision", return_value={"slug": "abort-s", "citationHash": "ah"}):
+            h2 = self._h()
+            h2.path = f"/api/promotions/{pid}/objections/{oid}/resolve"
+            h2._set_body(json.dumps({"resolution": "upheld", "body": "stands"}).encode())
+            h2.do_POST()
+        result = h2._json()
+        self.assertEqual(result["state"], "aborted")
+        self.assertEqual(result["anchored"], True)
+        self.anchor_seal.assert_called_once_with("abort-s")
+
+    def _demote_after_close(self):
+        p = self._open_promotion(window_hours=0)
+        with patch("seal.seal_decision", return_value={"slug": "prod-slug", "citationHash": "ph"}):
+            self._close(p["id"])
+        self.anchor_seal.reset_mock()
+        with patch("seal.seal_decision", return_value={"slug": "demote-slug", "citationHash": "dh"}):
+            h = self._h()
+            h.path = "/api/prompts/p1/demote/1.0.0"
+            h._set_body(json.dumps({"reason": "superseded"}).encode())
+            h.do_POST()
+        return h
+
+    def test_demote_response_carries_anchor_fields(self):
+        h = self._demote_after_close()
+        result = h._json()
+        self.assertEqual(result["status"], "deprecated")
+        self.assertEqual(result["sealed"], True)
+        self.assertEqual(result["anchored"], True)
+        self.assertEqual(result["anchor_pushed"], True)
+        self.anchor_seal.assert_called_once_with("demote-slug")
+
+    def test_demote_anchor_failure_is_loud(self):
+        self.anchor_seal.return_value = {
+            "anchored": False, "anchor_error": "hub verify failed: unreachable"}
+        h = self._demote_after_close()
+        result = h._json()
+        self.assertEqual(result["status"], "deprecated")
+        self.assertEqual(result["sealed"], True)   # seal stands
+        self.assertEqual(result["anchored"], False)
+        self.assertIn("anchor_error", result)
+
+    def test_demote_push_failure_reported_distinctly(self):
+        self.anchor_seal.return_value = {
+            "anchored": True, "anchor_pushed": False,
+            "anchor_push_error": "git push failed: offline"}
+        h = self._demote_after_close()
+        result = h._json()
+        self.assertEqual(result["anchored"], True)
+        self.assertEqual(result["anchor_pushed"], False)
+        self.assertIn("anchor_push_error", result)
+
+    def test_demote_seal_failure_never_anchors(self):
+        p = self._open_promotion(window_hours=0)
+        with patch("seal.seal_decision", return_value={"slug": "prod-slug", "citationHash": "ph"}):
+            self._close(p["id"])
+        self.anchor_seal.reset_mock()
+        with patch("seal.seal_decision",
+                   side_effect=seal.SealError("ThreadHub is not reachable")):
+            h = self._h()
+            h.path = "/api/prompts/p1/demote/1.0.0"
+            h._set_body(json.dumps({"reason": "superseded"}).encode())
+            h.do_POST()
+        result = h._json()
+        self.assertEqual(result["sealed"], False)
+        self.anchor_seal.assert_not_called()
 
 
 class TestCreatePromptGuard(PromotionApiTestCase):

@@ -212,15 +212,60 @@ class TestThreadsProxy(unittest.TestCase):
 
 
 class TestSealRoute(unittest.TestCase):
-    @patch("seal.seal_decision", return_value={"slug": "ship", "citationHash": "sha256:h"})
-    def test_seal_success(self, mock_seal):
-        h = MockHandler()
+    def _seal_body(self, h):
         h.path = "/api/threads/seal"
         h._set_body(json.dumps({"question": "q", "decision": "d", "decidedBy": "Troy",
                                 "evidence": [{"source": "s", "finding": "f"}]}).encode())
+
+    @patch("anchors.anchor_seal", return_value={"anchored": True, "anchor_pushed": True})
+    @patch("seal.seal_decision", return_value={"slug": "ship", "citationHash": "sha256:h"})
+    def test_seal_success(self, mock_seal, mock_anchor):
+        h = MockHandler()
+        self._seal_body(h)
         h.do_POST()
         self.assertEqual(h._last_status, 200)
         self.assertIn(b"ship", h._body_written)
+        body = json.loads(h._body_written)
+        self.assertEqual(body["anchored"], True)
+        self.assertEqual(body["anchor_pushed"], True)
+        mock_anchor.assert_called_once_with("ship")
+
+    @patch("anchors.anchor_seal",
+           return_value={"anchored": False, "anchor_error": "git push failed: no remote"})
+    @patch("seal.seal_decision", return_value={"slug": "ship", "citationHash": "sha256:h"})
+    def test_seal_anchor_failure_is_loud_but_seal_stands(self, mock_seal, mock_anchor):
+        h = MockHandler()
+        self._seal_body(h)
+        h.do_POST()
+        self.assertEqual(h._last_status, 200)  # the seal itself succeeded
+        body = json.loads(h._body_written)
+        self.assertEqual(body["slug"], "ship")  # seal result intact
+        self.assertEqual(body["anchored"], False)
+        self.assertIn("anchor_error", body)
+
+    @patch("anchors.anchor_seal",
+           return_value={"anchored": True, "anchor_pushed": False,
+                         "anchor_push_error": "git push failed: offline"})
+    @patch("seal.seal_decision", return_value={"slug": "ship", "citationHash": "sha256:h"})
+    def test_seal_push_failure_reported_distinctly(self, mock_seal, mock_anchor):
+        h = MockHandler()
+        self._seal_body(h)
+        h.do_POST()
+        body = json.loads(h._body_written)
+        self.assertEqual(body["anchored"], True)
+        self.assertEqual(body["anchor_pushed"], False)
+        self.assertIn("anchor_push_error", body)
+        self.assertNotIn("anchor_error", body)
+
+    @patch("anchors.anchor_seal")
+    @patch("seal.seal_decision", side_effect=__import__("seal").SealValidationError({"question": "required"}))
+    def test_failed_seal_never_anchors(self, mock_seal, mock_anchor):
+        h = MockHandler()
+        h.path = "/api/threads/seal"
+        h._set_body(json.dumps({}).encode())
+        h.do_POST()
+        self.assertEqual(h._last_status, 400)
+        mock_anchor.assert_not_called()
 
     @patch("seal.seal_decision", side_effect=__import__("seal").SealValidationError({"question": "required"}))
     def test_seal_validation_error_is_400(self, mock_seal):

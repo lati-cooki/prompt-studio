@@ -8,6 +8,7 @@ import logging
 import sqlite3
 import urllib.request
 import urllib.error
+import anchors
 import seal
 import promotion_store
 import promotion_evidence
@@ -820,17 +821,26 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         """Seal a terminal promotion; never raises — failure is recorded, not fatal.
         Payload construction lives inside the try too: malformed stored evidence
         (or anything else about this promotion) must record a seal_error, never
-        crash the request or leave the promotion permanently unresealable."""
+        crash the request or leave the promotion permanently unresealable.
+
+        After a successful seal the thread head is anchored (anchors.anchor_seal,
+        DR-phase5-topology Decision 4) and the anchored/anchor_error/
+        anchor_pushed/anchor_push_error fields ride on the response. Anchoring
+        happens OUTSIDE the try: anchor_seal never raises by contract, and an
+        anchoring failure must never be recorded as a seal_error — the seal
+        exists in the hub regardless (rule 2.1)."""
         try:
             writer_map, decided_by = self._writers_for_promotion(conn, promotion)
             payload = promotion_seal.build_seal_payload(promotion, outcome, decided_by)
             result = seal.seal_decision(payload, writers=writer_map)
-            return promotion_store.mark_seal_result(
+            p = promotion_store.mark_seal_result(
                 conn, promotion["id"], slug=result["slug"],
                 citation_hash=result.get("citationHash"))
         except Exception as e:
             msg = getattr(e, "message", None) or str(e)
             return promotion_store.mark_seal_result(conn, promotion["id"], error=msg)
+        p.update(anchors.anchor_seal(result["slug"]))
+        return p
 
     def handle_post_promote(self, prompt_id, version):
         data = self.read_json_body()
@@ -1013,10 +1023,13 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 self._decided_by(conn, prompt_id, version), superseded_slug=superseded)
             try:
                 result = seal.seal_decision(payload)
-                self.send_json({"status": "deprecated", "sealed": True, **result})
             except (seal.SealError, seal.SealValidationError) as e:
                 msg = getattr(e, "message", None) or str(e)
                 self.send_json({"status": "deprecated", "sealed": False, "seal_error": msg})
+            else:
+                anchor = anchors.anchor_seal(result["slug"])
+                self.send_json({"status": "deprecated", "sealed": True,
+                                **result, **anchor})
         finally:
             conn.close()
 
@@ -1160,6 +1173,11 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             body.update(e.extra)
             self.send_json(body, status=e.status)
             return
+        # Seal is not done until the anchor commit exists or the failure is
+        # loudly reported (anchored/anchor_error — same pattern as
+        # sealed/seal_error). anchor_seal never raises; failure never unwinds
+        # the seal — the hub record already exists.
+        result.update(anchors.anchor_seal(result["slug"]))
         self.send_json(result, status=200)
 
     def handle_get_registry(self):

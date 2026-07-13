@@ -378,6 +378,8 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 self.handle_get_thread_verify(rest[:-len('/verify')])
             else:
                 self.handle_get_thread(rest)
+        elif self.path.startswith('/object/'):
+            self.handle_object_get(self.path.removeprefix('/object/'))
         elif self.path in ('/', '/sandbox', '/sandbox/'):
             self.serve_sandbox_index()
         elif self.path in ('/registry', '/registry/'):
@@ -489,6 +491,8 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             self.handle_post_chat()
         elif self.path == '/api/threads/seal':
             self.handle_seal()
+        elif self.path.startswith('/api/object/'):
+            self.handle_object_post(self.path.removeprefix('/api/object/'))
         else:
             self.send_error(404)
 
@@ -983,6 +987,95 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json(p)
         finally:
             conn.close()
+
+    # -- Slice 6: the public /object/* surface -----------------------------
+
+    def _send_generic_404_page(self):
+        """The ONE page every /object/* validation failure gets — identical
+        bytes whether the token is unknown, revoked, exhausted, expired, or
+        its promotion closed (no oracle)."""
+        body = objections.GENERIC_404_HTML.encode('utf-8')
+        self.send_response(404)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def handle_object_get(self, rest):
+        parts = [urllib.parse.unquote(p) for p in rest.split('?', 1)[0].split('/')]
+        if len(parts) == 1 and parts[0]:
+            self.handle_object_page(parts[0])
+        elif len(parts) == 3 and parts[1] == 'status':
+            self.handle_object_status(parts[0], parts[2])
+        else:
+            self._send_generic_404_page()
+
+    def handle_object_page(self, raw):
+        """GET /object/<token> — the standalone objection page (no studio
+        shell; server-rendered string template, user-derived strings all
+        escaped in objections.render_object_page)."""
+        conn = self.get_db()
+        try:
+            try:
+                token, promotion = objections.validate_token(conn, raw)
+            except objections.TokenInvalid:
+                self._send_generic_404_page()
+                return
+        finally:
+            conn.close()
+        body = objections.render_object_page(promotion, token, raw).encode('utf-8')
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def handle_object_status(self, raw, oid):
+        conn = self.get_db()
+        try:
+            try:
+                self.send_json(objections.objection_status(conn, raw, oid))
+            except objections.TokenInvalid:
+                self.send_json(objections.GENERIC_404_JSON, status=404)
+        finally:
+            conn.close()
+
+    def handle_object_post(self, token):
+        """POST /api/object/<token> {body, contact, label?} — file the
+        objection. Rate-limited per IP (objections.allow_request) — the
+        ONLY rate-limited surface, per the plan: /api/object/* only."""
+        ip = self.client_address[0] if getattr(self, 'client_address', None) else '?'
+        if not objections.allow_request(ip):
+            self.send_json({"error": "rate limited — try again shortly"},
+                           status=429)
+            return
+        data = self.read_json_body()
+        if data is None:
+            return
+        conn = self.get_db()
+        try:
+            try:
+                receipt = objections.file_objection(
+                    conn, urllib.parse.unquote(token.split('?', 1)[0]),
+                    data.get("body"), data.get("contact"),
+                    label=data.get("label"))
+            except objections.TokenInvalid:
+                self.send_json(objections.GENERIC_404_JSON, status=404)
+                return
+            except promotion_store.PromotionError as e:
+                self._promotion_error(e)
+                return
+            except writers.WriterError as e:
+                self.send_json({"error": e.message}, status=e.status)
+                return
+            except seal.SealError as e:
+                body = {"error": e.message}
+                body.update(e.extra)
+                self.send_json(body, status=e.status)
+                return
+        finally:
+            conn.close()
+        self.send_json(receipt)
 
     def handle_token_mint(self, pid):
         """POST /api/promotions/<pid>/tokens {invitee_label?, use_limit?} —

@@ -210,3 +210,213 @@ def revoke_token(conn, pid, token_id):
     conn.execute("UPDATE fcp_tokens SET revoked=1 WHERE id=?", (token_id,))
     conn.commit()
     return {"revoked": True, "token_id": token_id, "promotion_id": int(pid)}
+
+
+# ---------------------------------------------------------------------------
+# token validation — one exception, one generic 404, no oracle
+
+class TokenInvalid(Exception):
+    """Raised for EVERY token-check failure on /object/* paths. Routes map
+    this to one byte-identical generic 404 — deliberately no detail: an
+    outsider probing tokens must not learn whether one exists, is revoked,
+    is exhausted, is expired, or belongs to a closed promotion."""
+
+
+def validate_token(conn, raw):
+    """Full validation for the page and filing paths. Returns
+    (token_row_dict, promotion_dict) or raises TokenInvalid."""
+    ensure_tokens_table(conn)
+    row = conn.execute("SELECT * FROM fcp_tokens WHERE token_hash=?",
+                       (hash_token(raw or ""),)).fetchone()
+    if row is None:
+        raise TokenInvalid()
+    token = dict(row)
+    if token["revoked"]:
+        raise TokenInvalid()
+    if token["uses"] >= token["use_limit"]:
+        raise TokenInvalid()
+    if _iso(_now()) >= token["expires_at"]:  # window-close snapshot
+        raise TokenInvalid()
+    try:
+        promotion = promotion_store.get_promotion(conn, token["promotion_id"])
+    except promotion_store.PromotionError:
+        raise TokenInvalid()
+    if promotion["state"] != promotion_store.OPEN:
+        raise TokenInvalid()
+    return token, promotion
+
+
+# ---------------------------------------------------------------------------
+# per-IP rate limit — /api/object/* only
+
+RATE_LIMIT = 10          # requests
+RATE_WINDOW = 60.0       # per this many seconds, per IP
+
+
+def allow_request(ip, now=None):
+    """Sliding-window in-memory counter (RATE_LIMIT per RATE_WINDOW per IP),
+    applied by the server to /api/object/* ONLY. In-memory means it resets
+    on restart — acceptable for the localhost deployment posture; a public
+    deployment needs a real limiter (part of the pre-Sept-7 follow-up)."""
+    now = time.time() if now is None else now
+    bucket = _rate_buckets.setdefault(ip, [])
+    cutoff = now - RATE_WINDOW
+    bucket[:] = [t for t in bucket if t > cutoff]
+    if len(bucket) >= RATE_LIMIT:
+        return False
+    bucket.append(now)
+    return True
+
+
+# ---------------------------------------------------------------------------
+# objection filing
+
+def _display_name_for(conn, token, label, contact_norm):
+    """invitee_label (operator-chosen at mint) or label (objector-chosen) or
+    objector-<n>. Any candidate CONTAINING the contact string is discarded:
+    display_name reaches the hub, and the contact never does — that
+    invariant is unconditional, not advisory."""
+    for candidate in (token.get("invitee_label"), label):
+        candidate = (candidate or "").strip()
+        if candidate and contact_norm not in candidate.lower():
+            return candidate
+    n = conn.execute(
+        "SELECT COUNT(*) FROM writers WHERE name LIKE 'objector:%'"
+    ).fetchone()[0]
+    return f"objector-{n + 1}"
+
+
+def file_objection(conn, raw, body, contact, label=None):
+    """POST /api/object/<token> — validate the token, provision the objector
+    writer (BEFORE the objection exists, so the seal path can attribute it;
+    the 5ab35b3 fail-closed guard is the backstop, not the plan), insert the
+    objection (channel='token'), burn a use, and return the immediate
+    receipt {objection_id, body_hash, status_url}.
+
+    Privacy: the contact string is normalized (trim/lowercase) and lives in
+    the local writer NAME only ("objector:<contact>"); the hub sees the
+    display_name and the minted identity id, never the contact."""
+    token, promotion = validate_token(conn, raw)
+    body = (body or "").strip()
+    if not body:
+        raise promotion_store.PromotionError("objection body required", 422)
+    contact_norm = (contact or "").strip().lower()
+    if not contact_norm:
+        raise promotion_store.PromotionError(
+            "contact required (kept local — never sent to the hub)", 422)
+    writer_name = f"objector:{contact_norm}"
+    display_name = _display_name_for(conn, token, label, contact_norm)
+    # Mint-first (idempotent): may raise WriterError/SealError — nothing has
+    # been written locally yet, so a hub failure files nothing.
+    writers.ensure_writer(conn, writer_name, display_name=display_name,
+                          kind="human")
+    cur = conn.execute(
+        """INSERT INTO promotion_objections
+           (promotion_id, raised_at, body, author_writer, channel, token_id)
+           VALUES (?,?,?,?,?,?)""",
+        (promotion["id"], _iso(_now()), body, writer_name, "token",
+         token["id"]))
+    conn.execute("UPDATE fcp_tokens SET uses = uses + 1 WHERE id=?",
+                 (token["id"],))
+    conn.commit()
+    oid = cur.lastrowid
+    return {
+        "objection_id": oid,
+        "body_hash": "sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest(),
+        "status_url": f"/object/{raw}/status/{oid}",
+    }
+
+
+# ---------------------------------------------------------------------------
+# standalone page — server-rendered string template, no studio shell
+
+def _e(v):
+    return html.escape(str(v), quote=True)
+
+
+def _js(v):
+    # JSON-encode for inline <script> embedding; make it </script>-proof.
+    return json.dumps(v).replace("<", "\\u003c").replace(">", "\\u003e")
+
+
+def render_object_page(promotion, token, raw):
+    """The outside skeptic's page: prompt id/version, window countdown,
+    pinned-evidence hash or its disclosed absence, textarea + contact.
+    EVERYTHING user-derived is escaped (_e for HTML, _js for the inline
+    script). No studio shell, no JS dependencies beyond the countdown and
+    the fetch that files the objection."""
+    ev = promotion.get("evidence")
+    if isinstance(ev, dict):
+        evidence_html = (
+            "<p>Pinned evidence content_hash: "
+            f"<code>{_e(ev.get('content_hash', 'unknown'))}</code> "
+            f"(source: <code>{_e(ev.get('source_file', 'unknown'))}</code>)</p>")
+    else:
+        evidence_html = (
+            "<p>No pinned eval evidence is attached to this promotion — it "
+            "proceeded with that absence disclosed.</p>")
+    greeting = ""
+    if token.get("invitee_label"):
+        greeting = f"<p>Invitation for: <b>{_e(token['invitee_label'])}</b></p>"
+    pid_v = f"{_e(promotion['prompt_id'])} {_e(promotion['version'])}"
+    closes = _e(promotion["closes_at"])
+    return f"""<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Objection — {pid_v}</title>
+<style>
+body{{font:16px/1.5 system-ui,sans-serif;max-width:42rem;margin:2rem auto;padding:0 1rem;color:#222}}
+textarea,input{{width:100%;box-sizing:border-box;font:inherit;padding:.4rem;margin:.2rem 0 .8rem}}
+textarea{{min-height:8rem}}
+button{{font:inherit;padding:.5rem 1.2rem}}
+code{{background:#f4f4f4;padding:0 .2rem}}
+#receipt{{white-space:pre-wrap;background:#f4f4f4;padding:1rem;display:none}}
+small{{color:#555}}
+</style></head><body>
+<h1>File an objection</h1>
+<p>Promotion under final comment: <b>{pid_v}</b></p>
+{greeting}
+<p>Window closes at <code>{closes}</code> — <span id="countdown">…</span></p>
+{evidence_html}
+<form id="f">
+<label>Your objection<br><textarea name="body" required></textarea></label>
+<label>Contact (stays with the studio operator; never published to the hub)<br>
+<input name="contact" required></label>
+<label>Display name (optional — how the public record names you)<br>
+<input name="label"></label>
+<button type="submit">File objection</button>
+</form>
+<p id="receipt"></p>
+<small>Filing records your objection under a custodial hub identity; your
+receipt will disclose custody and show you how to verify the sealed record
+yourself.</small>
+<script>
+var closesAt = new Date({_js(promotion["closes_at"])});
+function tick() {{
+  var ms = closesAt - Date.now();
+  document.getElementById("countdown").textContent =
+    ms <= 0 ? "window elapsed" :
+    Math.floor(ms/3600000) + "h " + Math.floor(ms/60000)%60 + "m " +
+    Math.floor(ms/1000)%60 + "s remaining";
+}}
+tick(); setInterval(tick, 1000);
+document.getElementById("f").addEventListener("submit", function (ev) {{
+  ev.preventDefault();
+  var f = ev.target;
+  fetch("/api/object/" + {_js(raw)}, {{
+    method: "POST",
+    headers: {{"Content-Type": "application/json"}},
+    body: JSON.stringify({{body: f.body.value, contact: f.contact.value,
+                          label: f.label.value || undefined}})
+  }}).then(function (r) {{ return r.json(); }}).then(function (j) {{
+    var el = document.getElementById("receipt");
+    el.style.display = "block";
+    el.textContent = j.error ? ("Error: " + j.error)
+      : ("Objection filed.\\nobjection_id: " + j.objection_id
+         + "\\nbody_hash: " + j.body_hash
+         + "\\nreceipt/status: " + j.status_url
+         + "\\nKeep this URL — after the window seals it becomes your "
+         + "verifiable receipt.");
+  }});
+}});
+</script>
+</body></html>"""

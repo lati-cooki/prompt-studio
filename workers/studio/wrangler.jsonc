@@ -1,0 +1,53 @@
+// wrangler.jsonc — the studio on Cloudflare: one Worker, one SQLite Durable
+// Object. The Worker is the front door (skeptic surface first, bearer → role,
+// everything else answers the generic 404 HTML bytes); the DO holds the FCP
+// state machine, tokens, objections, refusals, and the rate limiter.
+//
+// Secret (never in this file): STUDIO_OPERATOR_TOKEN — set with
+//   wrangler secret put STUDIO_OPERATOR_TOKEN
+// UNSET means the Worker fails CLOSED: no operator surface exists at all
+// (src/index.js operatorAuthorized returns false without a secret — the
+// local Python server's "no token = open" posture would be catastrophic on
+// a public Worker). Tests inject it via vitest.config.js miniflare bindings.
+{
+  "name": "studio-worker",
+  "main": "src/index.js",
+  "compatibility_date": "2026-07-01",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "durable_objects": {
+    "bindings": [{ "name": "STUDIO", "class_name": "StudioState" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["StudioState"] }],
+
+  // Studio → hub service binding (named entrypoint; the binding IS the
+  // capability — no secret crosses, hub invariants stay behind hub code).
+  // COMMENTED OUT until the HubInternal entrypoint lands hub-side (a later
+  // task); tests bind a stub via vitest.config.js miniflare.serviceBindings.
+  // Until then env.HUB is absent in production and src/hub.js fails closed:
+  // isPublished → false (no deliberation links), mintIdentity → throw
+  // (filing refuses with 502; nothing is written).
+  // "services": [
+  //   { "binding": "HUB", "service": "threadhub-cf", "entrypoint": "HubInternal" }
+  // ],
+
+  "vars": {
+    // Externally reachable bases for share/receipt URLs. The Host header is
+    // NEVER used (a client-controlled Host must not steer where an
+    // invitation or receipt points). One domain per the port plan; final
+    // values confirmed at cutover (staging runs on workers.dev first).
+    "PUBLIC_BASE_URL": "https://consensusprotocol.ai",
+    "HUB_PUBLIC_BASE_URL": "https://consensusprotocol.ai",
+    // Rate limit for ALL /object/* and /api/object/* surfaces, per IP:
+    // 'N' or 'N/seconds'. Malformed fails LOUD at DO construction
+    // (src/do.js parseRate) — misconfiguration must not launch a front
+    // door with a limiter it didn't ask for.
+    "OBJECT_RATE": "10/60"
+  },
+
+  "observability": { "enabled": true }
+
+  // NO routes / custom domain yet: staging runs on workers.dev first; the
+  // consensusprotocol.ai custom domain lands at cutover (plan phase 8),
+  // after the ANCHORS.md head byte-match gate.
+}

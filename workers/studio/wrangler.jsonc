@@ -22,14 +22,14 @@
 
   // Studio → hub service binding (named entrypoint; the binding IS the
   // capability — no secret crosses, hub invariants stay behind hub code).
-  // COMMENTED OUT until the HubInternal entrypoint lands hub-side (a later
-  // task); tests bind a stub via vitest.config.js miniflare.serviceBindings.
-  // Until then env.HUB is absent in production and src/hub.js fails closed:
-  // isPublished → false (no deliberation links), mintIdentity → throw
-  // (filing refuses with 502; nothing is written).
-  // "services": [
-  //   { "binding": "HUB", "service": "threadhub-cf", "entrypoint": "HubInternal" }
-  // ],
+  // The HubInternal entrypoint lives hub-side (threadhub-cf, merged); deploy
+  // threadhub-cf BEFORE studio-worker so the binding target exists. If env.HUB
+  // is ever absent, src/hub.js fails closed: isPublished → false (no
+  // deliberation links), mintIdentity → throw (filing refuses 502, nothing
+  // written). Tests bind a stub via vitest.config.js miniflare.serviceBindings.
+  "services": [
+    { "binding": "HUB", "service": "threadhub-cf", "entrypoint": "HubInternal" }
+  ],
 
   "vars": {
     // Externally reachable bases for share/receipt URLs. The Host header is

@@ -1120,11 +1120,33 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_generic_429(self, as_json):
+        """One generic 429 per surface — the limiter fires BEFORE token
+        validation, identically for any token, so it adds no oracle."""
+        if as_json:
+            self.send_json(objections.GENERIC_429_JSON, status=429)
+            return
+        body = objections.GENERIC_429_HTML.encode('utf-8')
+        self.send_response(429)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _client_ip(self):
+        return self.client_address[0] if getattr(self, 'client_address', None) else '?'
+
     def handle_object_get(self, rest):
         parts = [urllib.parse.unquote(p) for p in rest.split('?', 1)[0].split('/')]
+        is_status = len(parts) == 3 and parts[1] == 'status'
+        # Task 13: the limiter covers ALL /object/* surfaces — page and
+        # status GETs included, not just the filing API.
+        if not objections.allow_request(self._client_ip()):
+            self._send_generic_429(as_json=is_status)
+            return
         if len(parts) == 1 and parts[0]:
             self.handle_object_page(parts[0])
-        elif len(parts) == 3 and parts[1] == 'status':
+        elif is_status:
             self.handle_object_status(parts[0], parts[2])
         else:
             self._send_generic_404_page()
@@ -1161,12 +1183,11 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
 
     def handle_object_post(self, token):
         """POST /api/object/<token> {body, contact, label?} — file the
-        objection. Rate-limited per IP (objections.allow_request) — the
-        ONLY rate-limited surface, per the plan: /api/object/* only."""
-        ip = self.client_address[0] if getattr(self, 'client_address', None) else '?'
+        objection. Rate-limited per IP (objections.allow_request), sharing
+        one budget with the page/status GETs (Task 13)."""
+        ip = self._client_ip()
         if not objections.allow_request(ip):
-            self.send_json({"error": "rate limited — try again shortly"},
-                           status=429)
+            self._send_generic_429(as_json=True)
             return
         data = self.read_json_body()
         if data is None:

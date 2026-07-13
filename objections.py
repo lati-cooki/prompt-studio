@@ -100,6 +100,14 @@ GENERIC_404_HTML = (
     "<!doctype html><meta charset='utf-8'><title>Not found</title>"
     "<p>Not found.</p>")
 
+# generic 429 — same discipline: one body per surface, no detail beyond
+# "rate limited" (the limiter must not become the oracle the 404s refuse
+# to be — it fires before token validation, identically for any token)
+GENERIC_429_JSON = {"error": "rate limited — try again shortly"}
+GENERIC_429_HTML = (
+    "<!doctype html><meta charset='utf-8'><title>Too many requests</title>"
+    "<p>Too many requests — try again shortly.</p>")
+
 # ---------------------------------------------------------------------------
 # DR 5.6 custody disclosure — travels ON the receipt (and the mint response,
 # so the operator can forward it with the link), visible without querying
@@ -164,10 +172,9 @@ def _custody_disclosure_for(writer):
 
 
 # ---------------------------------------------------------------------------
-# per-IP rate limit state (Slice 6 files it on /api/object/* only) —
-# in-memory by design: resets on restart, which is fine for the localhost
-# deployment posture. See allow_request below.
+# per-IP rate limit state — see allow_request below.
 _rate_buckets = {}
+_last_sweep = 0.0
 
 # ---------------------------------------------------------------------------
 # storage
@@ -310,20 +317,30 @@ def validate_token(conn, raw):
 
 
 # ---------------------------------------------------------------------------
-# per-IP rate limit — /api/object/* only
-
-RATE_LIMIT = 10          # requests
-RATE_WINDOW = 60.0       # per this many seconds, per IP
+# per-IP rate limit — ALL /object/* and /api/object/* surfaces (Task 13):
+# page GETs and status GETs included; a prober hammering the page render
+# hits the same limiter as the filing API. RATE_LIMIT/RATE_WINDOW are
+# env-tunable via STUDIO_OBJECT_RATE (module-top config block).
 
 
 def allow_request(ip, now=None):
-    """Sliding-window in-memory counter (RATE_LIMIT per RATE_WINDOW per IP),
-    applied by the server to /api/object/* ONLY. In-memory means it resets
-    on restart — acceptable for the localhost deployment posture; a public
-    deployment needs a real limiter (part of the pre-Sept-7 follow-up)."""
+    """Sliding-window in-memory counter (RATE_LIMIT per RATE_WINDOW per IP).
+
+    In-memory, DOCUMENTED trade-off: state is per-process and resets on
+    restart — fine for a single-process deployment; a fronting proxy may
+    add its own layer. Buckets whose entries have all aged out are EVICTED
+    once per window (a full sweep, amortized), so a probe spread across
+    many distinct IPs cannot grow the map unboundedly. The backwards-clock
+    branch only matters for tests that pass explicit `now` values."""
+    global _last_sweep
     now = time.time() if now is None else now
-    bucket = _rate_buckets.setdefault(ip, [])
     cutoff = now - RATE_WINDOW
+    if now - _last_sweep >= RATE_WINDOW or now < _last_sweep:
+        _last_sweep = now
+        for stale in [k for k, b in _rate_buckets.items()
+                      if not b or b[-1] <= cutoff]:
+            del _rate_buckets[stale]
+    bucket = _rate_buckets.setdefault(ip, [])
     bucket[:] = [t for t in bucket if t > cutoff]
     if len(bucket) >= RATE_LIMIT:
         return False

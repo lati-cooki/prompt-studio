@@ -372,5 +372,88 @@ class TestConfigUrls(FrontDoorCase):
         self.assertNotIn('headers.get("Host"', src)
 
 
+# ---------------------------------------------------------------------------
+# Deliverable 4 — the rate limiter, real: eviction, env-tunable, ALL
+# /object/* surfaces, generic 429 bodies
+
+
+class TestRateLimiter(FrontDoorCase):
+    def _get(self, path, ip):
+        h = self._h(ip)
+        h.path = path
+        h.do_GET()
+        return h
+
+    def test_parse_rate_spec(self):
+        self.assertEqual(objections._parse_rate("10/60"), (10, 60.0))
+        self.assertEqual(objections._parse_rate("5"), (5, 60.0))
+        self.assertEqual(objections._parse_rate("20/30"), (20, 30.0))
+
+    def test_rate_is_tunable(self):
+        with patch.object(objections, "RATE_LIMIT", 3):
+            for i in range(3):
+                self.assertTrue(objections.allow_request("9.9.9.9",
+                                                         now=1000.0 + i))
+            self.assertFalse(objections.allow_request("9.9.9.9", now=1003.0))
+
+    def test_stale_buckets_are_evicted(self):
+        # no unbounded growth: a distinct-IP probe sweep must not leave a
+        # bucket per IP forever
+        objections.allow_request("10.0.0.1", now=1000.0)
+        objections.allow_request("10.0.0.2", now=1000.0)
+        self.assertIn("10.0.0.1", objections._rate_buckets)
+        later = 1000.0 + objections.RATE_WINDOW * 2
+        objections.allow_request("10.0.0.3", now=later)
+        self.assertNotIn("10.0.0.1", objections._rate_buckets)
+        self.assertNotIn("10.0.0.2", objections._rate_buckets)
+        self.assertIn("10.0.0.3", objections._rate_buckets)
+
+    def test_page_get_hits_the_limiter(self):
+        p, minted = self._minted()
+        ip = "198.51.100.9"
+        for _ in range(objections.RATE_LIMIT):
+            self._get(f"/object/{minted['token']}", ip)
+        h = self._get(f"/object/{minted['token']}", ip)
+        self.assertEqual(h._last_status, 429)
+        # generic body — and identical whether the token is valid or bogus
+        # (the limiter must not become the oracle the 404s refuse to be)
+        h2 = self._get("/object/bogus", ip)
+        self.assertEqual(h2._last_status, 429)
+        self.assertEqual(h._body_written, h2._body_written)
+        self.assertEqual(h._body_written,
+                         objections.GENERIC_429_HTML.encode("utf-8"))
+
+    def test_status_get_hits_the_limiter(self):
+        p, minted = self._minted()
+        h, _ = self._file(minted["token"])
+        oid = h._json()["objection_id"]
+        ip = "198.51.100.10"
+        for _ in range(objections.RATE_LIMIT):
+            self._get(f"/object/{minted['token']}/status/{oid}", ip)
+        s = self._get(f"/object/{minted['token']}/status/{oid}", ip)
+        self.assertEqual(s._last_status, 429)
+        self.assertEqual(s._json(), objections.GENERIC_429_JSON)
+
+    def test_api_post_and_page_share_one_budget(self):
+        ip = "198.51.100.11"
+        for _ in range(objections.RATE_LIMIT):
+            h = self._post_objection("bogus", {"body": "x", "contact": "a@b"},
+                                     ip=ip)
+            self.assertEqual(h._last_status, 404)
+        g = self._get("/object/bogus", ip)
+        self.assertEqual(g._last_status, 429)
+
+    def test_mint_route_not_limited(self):
+        ip = "198.51.100.12"
+        for _ in range(objections.RATE_LIMIT + 1):
+            self._get("/object/bogus", ip)
+        p = self._open_promotion()
+        h = self._h(ip)
+        h.path = f"/api/promotions/{p['id']}/tokens"
+        h._set_body(b"{}")
+        h.do_POST()
+        self.assertEqual(h._last_status, 200)
+
+
 if __name__ == "__main__":
     unittest.main()

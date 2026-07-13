@@ -10,6 +10,7 @@ import urllib.request
 import urllib.error
 import urllib.parse
 import anchors
+import objections
 import seal
 import promotion_store
 import promotion_evidence
@@ -264,6 +265,7 @@ def init_db():
         migrate_sessions(conn)
         migrate_db(conn)
         migrate_actor_columns(conn)
+        objections.ensure_tokens_table(conn)  # Slice 6 (guarded, idempotent)
         conn.executescript(schema)
         conn.commit()
         _seed_prompts_from_index(conn)
@@ -467,6 +469,10 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             parts = self.path.removeprefix('/api/promotions/').split('/')
             if len(parts) == 2 and parts[1] in ('object', 'close', 'waive', 'abort', 'reseal'):
                 self.handle_promotion_action(parts[0], parts[1])
+            elif len(parts) == 2 and parts[1] == 'tokens':
+                self.handle_token_mint(parts[0])
+            elif len(parts) == 4 and parts[1] == 'tokens' and parts[3] == 'revoke':
+                self.handle_token_revoke(parts[0], parts[2])
             elif len(parts) == 4 and parts[1] == 'objections' and parts[3] == 'resolve':
                 self.handle_objection_resolve(parts[0], parts[2])
             else:
@@ -975,6 +981,42 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             if p["state"] == "aborted":  # upheld objection forced the abort — seal it
                 p = self._seal_promotion(conn, p, "aborted")
             self.send_json(p)
+        finally:
+            conn.close()
+
+    def handle_token_mint(self, pid):
+        """POST /api/promotions/<pid>/tokens {invitee_label?, use_limit?} —
+        mint an objection token (Slice 6). The raw token appears ONCE, in
+        this response; only its hash is stored. Refuses 409 when the
+        operator writer is unprovisioned (see objections.mint_token).
+        "Operator-only" is deployment posture (localhost), not enforced
+        auth — objections.POSTURE_NOTE rides on the response."""
+        data = self.read_json_body()
+        if data is None:
+            return
+        conn = self.get_db()
+        try:
+            try:
+                minted = objections.mint_token(
+                    conn, pid,
+                    invitee_label=data.get("invitee_label"),
+                    use_limit=data.get("use_limit", 1))
+            except promotion_store.PromotionError as e:
+                self._promotion_error(e)
+                return
+        finally:
+            conn.close()
+        host = self.headers.get('Host') or f"localhost:{PORT}"
+        minted["url"] = f"http://{host}{minted.pop('url_path')}"
+        self.send_json(minted)
+
+    def handle_token_revoke(self, pid, token_id):
+        conn = self.get_db()
+        try:
+            try:
+                self.send_json(objections.revoke_token(conn, pid, token_id))
+            except promotion_store.PromotionError as e:
+                self._promotion_error(e)
         finally:
             conn.close()
 

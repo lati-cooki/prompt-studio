@@ -32,6 +32,7 @@ _load_dotenv()
 
 import anchors
 import challenge
+import cloud_store
 import objections
 import publication
 import seal
@@ -45,11 +46,29 @@ try:
 except ImportError:
     anthropic = None
 
+# ---------------------------------------------------------------------------
+# operator-plane indirection (Task 19). When STUDIO_CLOUD_BASE_URL is set the
+# FCP/promotion/token/objection STATE reads+writes go to the studio Worker's
+# operator API (cloud_store); when unset everything is byte-for-byte the local
+# path (promotion_store + objections). _pstore covers the promotion_store
+# surface (promotions + metrics + seal bookkeeping); _ops covers the objections
+# OPERATOR surface (mint/revoke/refusal_summary/backfill). The rest of
+# objections (the local skeptic surface: validate_token, file_objection,
+# allow_request, record_refusal, the generic bodies) is NEVER indirected — the
+# public skeptic surface is the Worker's; these locals stay for local dev.
+# cloud_store raises promotion_store.PromotionError on any non-2xx, so the
+# existing `except promotion_store.PromotionError` handlers are unchanged.
+_CLOUD = bool(os.environ.get("STUDIO_CLOUD_BASE_URL"))
+_pstore = cloud_store if _CLOUD else promotion_store
+_ops = cloud_store if _CLOUD else objections
+
 DB_PATH = os.environ.get("DB_PATH", "prompt_studio.db")
 EVALS_DIR = os.environ.get("EVALS_DIR")  # None -> promotion_evidence default
 PORT = int(os.environ.get("PORT", 8000))
 MAX_BODY_BYTES = 10 * 1024 * 1024  # 10 MB
-THREADHUB_PORT = 8110
+# NOTE: the studio->hub base is now owned by seal._hub_base() (THREADHUB_BASE_URL
+# supersedes the port, default localhost:THREADHUB_PORT). proxy_threadhub_get
+# routes through it, so the old server-local port pin is gone.
 
 
 def is_safe_slug(slug):
@@ -421,9 +440,18 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(json_string.encode('utf-8'))
 
     def proxy_threadhub_get(self, th_path):
-        url = f"http://localhost:{THREADHUB_PORT}{th_path}"
+        # The base-URL env supersedes the local port pin on the studio->hub
+        # path (seal._hub_base): THREADHUB_BASE_URL points this read proxy at
+        # the remote hub too, default unchanged (localhost sidecar). Default
+        # passes the bare URL string (byte-identical local behavior); only a
+        # configured write token wraps a Request to add the bearer.
+        url = f"{seal._hub_base()}{th_path}"
+        target = url
+        if seal.THREADHUB_WRITE_TOKEN:
+            target = urllib.request.Request(url)
+            target.add_header("Authorization", f"Bearer {seal.THREADHUB_WRITE_TOKEN}")
         try:
-            with urllib.request.urlopen(url, timeout=10) as resp:
+            with urllib.request.urlopen(target, timeout=10) as resp:
                 body = resp.read()
                 status = resp.status
         except urllib.error.HTTPError as e:
@@ -899,6 +927,41 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                            (prompt_id, version)).fetchone()
         return (row["owner"] if row and row["owner"] else "Prompt Studio owner")
 
+    def _precheck_prompt_promotable(self, conn, prompt_id, version):
+        """Cloud mode (Task 19): the FCP store lives in the Worker and no
+        longer sees the laptop-only prompts table, so the two prompts-table
+        refusals that promotion_store.open_promotion enforces locally (unknown
+        prompt/version -> 404, already-production -> 409) are enforced HERE,
+        before the cloud open. Byte-identical messages to
+        promotion_store.open_promotion. No-op in local mode (open_promotion
+        does these itself)."""
+        row = conn.execute("SELECT status FROM prompts WHERE id=? AND version=?",
+                           (prompt_id, version)).fetchone()
+        if row is None:
+            raise promotion_store.PromotionError("prompt/version not found", 404)
+        if row["status"] == "production":
+            raise promotion_store.PromotionError("already in production", 409)
+
+    def _flip_prompt_after_cloud_terminal(self, conn, p):
+        """Cloud close/waive move the promotion in the Worker's DO but cannot
+        touch the laptop-only prompts table; flip it to production HERE after
+        the cloud acks, reusing promotion_store._flip_to_production (the same
+        logic _terminate uses locally). No-op in local mode — _terminate
+        already flipped.
+
+        NON-ATOMIC SEAM (documented): the cloud terminal state is
+        authoritative and lands first; this local flip is a second step. If the
+        process dies between the cloud ack and this flip, the promotion is
+        closed/waived on the cloud but the prompt is not yet production —
+        operator-recoverable by re-running the close (idempotent: the cloud
+        answers 409 not-open, and the operator flips the prompt), or by a small
+        reconciliation that reads the cloud terminal promotion and flips."""
+        if not _CLOUD:
+            return
+        promotion_store._flip_to_production(
+            conn, p["prompt_id"], p["version"], validated=p["evidence"] is not None)
+        conn.commit()
+
     def _writers_for_promotion(self, conn, promotion):
         """Resolve the per-record writer mapping for a promotion seal
         (DR-phase5-topology 5.2: evidence author = grader, default = operator).
@@ -942,6 +1005,19 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 writer_map["evidence"] = grader["threadhub_id"]
         objection_ids = []
         for o in promotion.get("objections", []):
+            # Cloud mode (Task 19): a token-channel objection was filed on the
+            # Worker, which minted its objector identity in the DO's
+            # objector_writers table — there is NO local writers row for it, so
+            # the fail-closed _required lookup would (wrongly) reject the seal.
+            # The Worker returns that hub id inline as author_threadhub_id;
+            # prefer it. Operator-channel objections carry a null here and fall
+            # through to the local writer lookup below. In the fully-local path
+            # promotion_store.get_promotion never adds this field, so .get()
+            # returns None and the original behaviour is preserved exactly.
+            cloud_tid = o.get("author_threadhub_id")
+            if cloud_tid:
+                objection_ids.append(cloud_tid)
+                continue
             name = o.get("author_writer")
             ow = _required(name, "objection author") if name else operator
             objection_ids.append(ow["threadhub_id"])
@@ -973,9 +1049,9 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             payload = promotion_seal.build_seal_payload(promotion, outcome, decided_by)
             result = seal.seal_decision(payload, writers=writer_map)
             if "records" in result:
-                objections.backfill_sealed_records(
+                _ops.backfill_sealed_records(
                     conn, promotion, result["records"], slug=result.get("slug"))
-            p = promotion_store.mark_seal_result(
+            p = _pstore.mark_seal_result(
                 conn, promotion["id"], slug=result["slug"],
                 citation_hash=result.get("citationHash"))
         except Exception as e:
@@ -986,7 +1062,7 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             # bookkeeping (the count assertion only guards the mismatch mode).
             conn.rollback()
             msg = getattr(e, "message", None) or str(e)
-            return promotion_store.mark_seal_result(conn, promotion["id"], error=msg)
+            return _pstore.mark_seal_result(conn, promotion["id"], error=msg)
         p.update(anchors.anchor_seal(result["slug"]))
         return p
 
@@ -1024,7 +1100,12 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         conn = self.get_db()
         try:
             try:
-                p = promotion_store.open_promotion(
+                # The prompts existence/production pre-checks consult the
+                # laptop-only prompts table; in cloud mode the Worker never
+                # sees it, so run them here BEFORE the cloud open.
+                if _CLOUD:
+                    self._precheck_prompt_promotable(conn, prompt_id, version)
+                p = _pstore.open_promotion(
                     conn, prompt_id, version,
                     window_hours=window_hours, evidence=evidence,
                     deliberation_slug=deliberation_slug)
@@ -1038,7 +1119,7 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
     def handle_get_promotions(self):
         conn = self.get_db()
         try:
-            self.send_json(promotion_store.list_promotions(conn))
+            self.send_json(_pstore.list_promotions(conn))
         finally:
             conn.close()
 
@@ -1062,7 +1143,7 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 return
         conn = self.get_db()
         try:
-            self.send_json(promotion_store.metrics(conn, window_days))
+            self.send_json(_pstore.metrics(conn, window_days))
         finally:
             conn.close()
 
@@ -1070,7 +1151,7 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         conn = self.get_db()
         try:
             try:
-                self.send_json(promotion_store.get_promotion(conn, pid))
+                self.send_json(_pstore.get_promotion(conn, pid))
             except promotion_store.PromotionError as e:
                 self._promotion_error(e)
         finally:
@@ -1084,22 +1165,24 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         try:
             try:
                 if action == 'object':
-                    self.send_json(promotion_store.add_objection(conn, pid, data.get("body")))
+                    self.send_json(_pstore.add_objection(conn, pid, data.get("body")))
                     return
                 if action == 'close':
-                    p = promotion_store.close_promotion(conn, pid)
+                    p = _pstore.close_promotion(conn, pid)
+                    self._flip_prompt_after_cloud_terminal(conn, p)
                     self.send_json(self._seal_promotion(conn, p, "promoted"))
                     return
                 if action == 'waive':
-                    p = promotion_store.waive_promotion(conn, pid, data.get("reason"))
+                    p = _pstore.waive_promotion(conn, pid, data.get("reason"))
+                    self._flip_prompt_after_cloud_terminal(conn, p)
                     self.send_json(self._seal_promotion(conn, p, "promoted"))
                     return
                 if action == 'abort':
-                    p = promotion_store.abort_promotion(conn, pid)
+                    p = _pstore.abort_promotion(conn, pid)
                     self.send_json(self._seal_promotion(conn, p, "aborted"))
                     return
                 if action == 'reseal':
-                    p = promotion_store.get_promotion(conn, pid)
+                    p = _pstore.get_promotion(conn, pid)
                     if p["state"] == "open":
                         self.send_json({"error": "promotion still open"}, status=409)
                         return
@@ -1120,7 +1203,7 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         conn = self.get_db()
         try:
             try:
-                p = promotion_store.resolve_objection(
+                p = _pstore.resolve_objection(
                     conn, pid, oid, data.get("resolution"), data.get("body"))
             except promotion_store.PromotionError as e:
                 self._promotion_error(e)
@@ -1308,7 +1391,7 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 return
         conn = self.get_db()
         try:
-            self.send_json(objections.refusal_summary(conn, window_days))
+            self.send_json(_ops.refusal_summary(conn, window_days))
         finally:
             conn.close()
 
@@ -1339,7 +1422,7 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         conn = self.get_db()
         try:
             try:
-                minted = objections.mint_token(
+                minted = _ops.mint_token(
                     conn, pid,
                     invitee_label=data.get("invitee_label"),
                     use_limit=data.get("use_limit", 1),
@@ -1349,6 +1432,15 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 return
         finally:
             conn.close()
+        if _CLOUD:
+            # The Worker's mint response is already fully assembled — `url`
+            # (absolute, from the Worker's own PUBLIC_BASE_URL) and, when the
+            # cited deliberation is associated AND published, `deliberation_url`
+            # (from the Worker's HUB_PUBLIC_BASE_URL). Those are the correct
+            # PUBLIC bases for the skeptic-facing objection surface, not the
+            # laptop's; pass it through untouched.
+            self.send_json(minted)
+            return
         # Share URL from CONFIG, never the Host header (a client-controlled
         # Host must not steer where an invitation points): STUDIO_PUBLIC_BASE_URL
         # when configured, the local bind otherwise.
@@ -1369,7 +1461,7 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         conn = self.get_db()
         try:
             try:
-                self.send_json(objections.revoke_token(conn, pid, token_id))
+                self.send_json(_ops.revoke_token(conn, pid, token_id))
             except promotion_store.PromotionError as e:
                 self._promotion_error(e)
         finally:

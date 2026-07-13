@@ -8,7 +8,23 @@ import urllib.request
 
 CLISTA_CLI = os.environ.get("CLISTA_CLI", os.path.expanduser("~/ClisTa-Protocol/src/cli.js"))
 THREADHUB_PORT = int(os.environ.get("THREADHUB_PORT", "8110"))
+# When THREADHUB_BASE_URL is set it SUPERSEDES the port entirely on the
+# studio->hub path (the hub may be a remote host on Cloudflare, not the local
+# sidecar); default is the unchanged localhost bind, so the fully-local path is
+# byte-for-byte identical. THREADHUB_WRITE_TOKEN, when set, adds a bearer to
+# every studio->hub request (the remote hub gates writes). This one seam also
+# routes writers.ensure_writer and publication.set_publication (both go through
+# _th) at the remote hub with no further edits.
+THREADHUB_BASE_URL = (os.environ.get("THREADHUB_BASE_URL") or "").rstrip("/") or None
+THREADHUB_WRITE_TOKEN = os.environ.get("THREADHUB_WRITE_TOKEN") or None
 AUTHOR_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".seal_author_id")
+
+
+def _hub_base():
+    """Base URL for the studio->hub path. THREADHUB_BASE_URL supersedes the
+    port; default stays the local sidecar bind (THREADHUB_PORT is read at call
+    time so tests patching seal.THREADHUB_PORT keep working)."""
+    return THREADHUB_BASE_URL or f"http://localhost:{THREADHUB_PORT}"
 
 
 class SealValidationError(Exception):
@@ -94,9 +110,11 @@ def author_clista_log(data, cwd):
 
 
 def _th(method, path, body=None):
-    url = f"http://localhost:{THREADHUB_PORT}{path}"
+    url = f"{_hub_base()}{path}"
     data = json.dumps(body).encode("utf-8") if body is not None else None
     headers = {"Content-Type": "application/json"} if data is not None else {}
+    if THREADHUB_WRITE_TOKEN:
+        headers["Authorization"] = f"Bearer {THREADHUB_WRITE_TOKEN}"
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:

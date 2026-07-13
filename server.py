@@ -778,8 +778,28 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         if operator is None:
             return None, self._decided_by(
                 conn, promotion["prompt_id"], promotion["version"])
-        decider = writers.get_writer(
-            conn, promotion.get("resolved_by") or "operator") or operator
+
+        def _required(name, role):
+            # Fail-closed per the silent-action DR ("systems that cannot write
+            # at action time must fail the action rather than act unwitnessed"):
+            # a NAMED actor that cannot be resolved to a provisioned writer must
+            # fail the seal — a seal that misattributes their record to the
+            # operator is worse than a seal_error (DR 5.2: semantic author =
+            # transport writer). _seal_promotion turns this raise into recorded
+            # seal_error bookkeeping; reseal recovers once the writer is
+            # provisioned. Slice 6 MUST provision objector writers before
+            # sealing — this guard makes that a hard requirement, not a
+            # convention. Only a NULL/absent actor may use the default author.
+            w = writers.get_writer(conn, name)
+            if w is None:
+                raise writers.WriterError(
+                    f"{role} '{name}' is not a provisioned writer — refusing to "
+                    "seal misattributed (fail-closed); provision it via "
+                    "writers.ensure_writer, then reseal")
+            return w
+
+        resolved_by = promotion.get("resolved_by")
+        decider = _required(resolved_by, "deciding writer") if resolved_by else operator
         writer_map = {"default": operator["threadhub_id"],
                       "claim": decider["threadhub_id"]}
         evidence = promotion.get("evidence")
@@ -789,7 +809,8 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 writer_map["evidence"] = grader["threadhub_id"]
         objection_ids = []
         for o in promotion.get("objections", []):
-            ow = writers.get_writer(conn, o.get("author_writer") or "operator") or operator
+            name = o.get("author_writer")
+            ow = _required(name, "objection author") if name else operator
             objection_ids.append(ow["threadhub_id"])
         if objection_ids:
             writer_map["objections"] = objection_ids

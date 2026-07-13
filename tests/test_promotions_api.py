@@ -567,6 +567,109 @@ class TestSealWriterWiring(PromotionApiTestCase):
         writers_map = mock_seal.call_args.kwargs["writers"]
         self.assertNotIn("evidence", writers_map)  # unknown grader -> default author
 
+    def test_named_unprovisioned_objector_fails_closed_no_seal(self):
+        # DR 5.2 fail-closed: an objection whose author_writer NAMES a writer
+        # that is not provisioned must record a seal_error — never silently
+        # seal the objection as the operator (misattribution).
+        self._seed_writers()
+        p = self._open_promotion(window_hours=0,
+                                 evidence_patch_value=self._graded_evidence())
+        pid = p["id"]
+        h = self._h()
+        h.path = f"/api/promotions/{pid}/object"
+        h._set_body(json.dumps({"body": "external concern"}).encode())
+        h.do_POST()
+        oid = h._json()["id"]
+        h2 = self._h()
+        h2.path = f"/api/promotions/{pid}/objections/{oid}/resolve"
+        h2._set_body(json.dumps({"resolution": "responded", "body": "ok"}).encode())
+        h2.do_POST()
+        # simulate a slice-6-style named objector that was never provisioned
+        self.anchor.execute(
+            "UPDATE promotion_objections SET author_writer='objector-1' WHERE id=?",
+            (oid,))
+        self.anchor.commit()
+
+        with patch("seal.seal_decision") as mock_seal:
+            h3 = self._h()
+            h3.path = f"/api/promotions/{pid}/close"
+            h3._set_body(b"")
+            h3.do_POST()
+
+        self.assertEqual(h3._last_status, 200)  # bookkeeping, not a crash
+        result = h3._json()
+        self.assertEqual(result["sealed"], 0)
+        self.assertIn("objector-1", result["seal_error"])
+        mock_seal.assert_not_called()  # nothing written to the hub
+
+    def test_named_unprovisioned_decider_fails_closed_no_seal(self):
+        self._seed_writers()
+        p = self._open_promotion(window_hours=0,
+                                 evidence_patch_value=self._graded_evidence())
+        pid = p["id"]
+        # close with a seal failure so the promotion stays resealable
+        with patch("seal.seal_decision", side_effect=Exception("hub hiccup")):
+            h = self._h()
+            h.path = f"/api/promotions/{pid}/close"
+            h._set_body(b"")
+            h.do_POST()
+        # simulate a terminating actor that was never provisioned
+        self.anchor.execute(
+            "UPDATE promotions SET resolved_by='ghost-writer' WHERE id=?", (pid,))
+        self.anchor.commit()
+
+        with patch("seal.seal_decision") as mock_seal:
+            h2 = self._h()
+            h2.path = f"/api/promotions/{pid}/reseal"
+            h2._set_body(b"")
+            h2.do_POST()
+
+        result = h2._json()
+        self.assertEqual(result["sealed"], 0)
+        self.assertIn("ghost-writer", result["seal_error"])
+        mock_seal.assert_not_called()
+
+    def test_null_actor_columns_keep_legacy_default_author(self):
+        # NULL/absent author_writer and resolved_by (pre-migration rows) may
+        # use the default writer — only a NAMED unprovisioned actor fails.
+        self._seed_writers()
+        p = self._open_promotion(window_hours=0,
+                                 evidence_patch_value=self._graded_evidence())
+        pid = p["id"]
+        h = self._h()
+        h.path = f"/api/promotions/{pid}/object"
+        h._set_body(json.dumps({"body": "legacy concern"}).encode())
+        h.do_POST()
+        oid = h._json()["id"]
+        h2 = self._h()
+        h2.path = f"/api/promotions/{pid}/objections/{oid}/resolve"
+        h2._set_body(json.dumps({"resolution": "responded", "body": "ok"}).encode())
+        h2.do_POST()
+        with patch("seal.seal_decision", side_effect=Exception("hub hiccup")):
+            h3 = self._h()
+            h3.path = f"/api/promotions/{pid}/close"
+            h3._set_body(b"")
+            h3.do_POST()
+        # pre-slice-2 shape: no recorded actors at all
+        self.anchor.execute(
+            "UPDATE promotions SET resolved_by=NULL WHERE id=?", (pid,))
+        self.anchor.execute(
+            "UPDATE promotion_objections SET author_writer=NULL WHERE id=?", (oid,))
+        self.anchor.commit()
+
+        with patch("seal.seal_decision",
+                   return_value={"slug": "s", "citationHash": "h", "records": []}) as mock_seal:
+            h4 = self._h()
+            h4.path = f"/api/promotions/{pid}/reseal"
+            h4._set_body(b"")
+            h4.do_POST()
+
+        result = h4._json()
+        self.assertEqual(result["sealed"], 1)
+        writers_map = mock_seal.call_args.kwargs["writers"]
+        self.assertEqual(writers_map["claim"], "id_troy")          # default decider
+        self.assertEqual(writers_map["objections"], ["id_troy"])  # default author
+
 
 if __name__ == "__main__":
     unittest.main()

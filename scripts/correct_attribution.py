@@ -101,11 +101,16 @@ def build_delegate_note():
 
 
 def _resolve(conn, name, execute):
-    """Dry run resolves by lookup only (never mints); --execute provisions the
-    writer via ensure_writer if this is its first act."""
+    """Dry run is fully read-only: lookup only, never mints, and tolerates a
+    pre-slice-2 DB with no writers table. --execute heals the table and
+    provisions the writer via ensure_writer if this is its first act."""
     if execute:
+        writers.ensure_table(conn)  # the DB copy may predate slice 2
         return writers.ensure_writer(conn, name)
-    return writers.get_writer(conn, name)
+    try:
+        return writers.get_writer(conn, name)
+    except sqlite3.OperationalError:
+        return None  # no writers table yet -> unprovisioned
 
 
 def main(argv=None):

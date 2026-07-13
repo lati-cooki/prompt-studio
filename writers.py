@@ -29,6 +29,20 @@ class WriterError(Exception):
         super().__init__(message)
 
 
+def ensure_table(conn):
+    """Create the writers table if this DB predates slice 2. The server creates
+    it at boot via schema.sql (keep the DDL there in sync with this); scripts
+    hitting an older DB copy call this before resolving writers."""
+    conn.execute("""CREATE TABLE IF NOT EXISTS writers (
+        name TEXT PRIMARY KEY,
+        threadhub_id TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        custodial INTEGER NOT NULL DEFAULT 1
+    )""")
+    conn.commit()
+
+
 def _row_to_dict(row):
     if row is None:
         return None

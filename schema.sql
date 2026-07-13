@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS evals (
 
 -- Phase 5 slice 2: one DISTINCT custodial ThreadHub identity per studio writer
 -- (DR-phase5-topology 5.2). Custodial: the hub holds keys; only the id lives here (5.5).
+-- Keep in sync with writers.ensure_table (scripts hitting pre-slice-2 DB copies).
 CREATE TABLE IF NOT EXISTS writers (
     name TEXT PRIMARY KEY,
     threadhub_id TEXT NOT NULL,

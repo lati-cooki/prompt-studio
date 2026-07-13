@@ -104,6 +104,29 @@ class TestDryRunDefault(ScriptTestCase):
         self.assertIn(expected_hash, out)
 
 
+class TestPreSlice2Db(unittest.TestCase):
+    """The live DB copy may predate slice 2 (no writers table until the server
+    reboots on new code) — the script must handle that, not crash."""
+
+    def test_dry_run_on_db_without_writers_table(self):
+        with tempfile.TemporaryDirectory() as d:
+            db = os.path.join(d, "old.db")
+            sqlite3.connect(db).close()  # empty DB, no tables at all
+            eval_file = os.path.join(d, "eval.json")
+            with open(eval_file, "w") as f:
+                f.write('{"grade": "A-"}')
+            buf = io.StringIO()
+            with patch("seal._th") as th, redirect_stdout(buf):
+                rc = ca.main(["--db", db, "--eval-file", eval_file])
+            th.assert_not_called()
+            self.assertEqual(rc, 0)
+            self.assertIn("unprovisioned", buf.getvalue())
+            # dry run is fully read-only: it must not even heal the schema
+            tables = {r[0] for r in sqlite3.connect(db).execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            self.assertNotIn("writers", tables)
+
+
 class TestExecute(ScriptTestCase):
     def test_execute_appends_correction_authored_by_operator(self):
         with patch("seal._th",

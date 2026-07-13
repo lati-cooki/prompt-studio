@@ -952,10 +952,15 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         NON-ATOMIC SEAM (documented): the cloud terminal state is
         authoritative and lands first; this local flip is a second step. If the
         process dies between the cloud ack and this flip, the promotion is
-        closed/waived on the cloud but the prompt is not yet production —
-        operator-recoverable by re-running the close (idempotent: the cloud
-        answers 409 not-open, and the operator flips the prompt), or by a small
-        reconciliation that reads the cloud terminal promotion and flips."""
+        closed/waived on the cloud but the prompt is not yet production.
+        Recovery is a reconciliation, NOT a naive retry: re-running the close
+        does NOT re-flip — close_promotion hits the already-terminal cloud
+        first, which 409s (not-open), and that PromotionError short-circuits
+        the handler before this helper runs. To heal, read the cloud terminal
+        promotion and apply _flip_to_production directly (a small reconcile
+        pass keyed on cloud-terminal-but-prompt-still-staging). Idempotent: the
+        flip is safe to re-apply. The window is tiny (one local commit) and
+        operator-recoverable."""
         if not _CLOUD:
             return
         promotion_store._flip_to_production(
@@ -1119,7 +1124,10 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
     def handle_get_promotions(self):
         conn = self.get_db()
         try:
-            self.send_json(_pstore.list_promotions(conn))
+            try:
+                self.send_json(_pstore.list_promotions(conn))
+            except promotion_store.PromotionError as e:
+                self._promotion_error(e)
         finally:
             conn.close()
 
@@ -1143,7 +1151,10 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 return
         conn = self.get_db()
         try:
-            self.send_json(_pstore.metrics(conn, window_days))
+            try:
+                self.send_json(_pstore.metrics(conn, window_days))
+            except promotion_store.PromotionError as e:
+                self._promotion_error(e)
         finally:
             conn.close()
 
@@ -1391,7 +1402,10 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 return
         conn = self.get_db()
         try:
-            self.send_json(_ops.refusal_summary(conn, window_days))
+            try:
+                self.send_json(_ops.refusal_summary(conn, window_days))
+            except promotion_store.PromotionError as e:
+                self._promotion_error(e)
         finally:
             conn.close()
 

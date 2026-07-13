@@ -1,0 +1,19 @@
+{
+  "name": "studio-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cloudflare Worker + SQLite Durable Object for the studio's public skeptic surface (/object/*) and the FCP state machine, plus the bearer-gated operator API the laptop client (Task 19) drives. Byte-pinned refusal bodies ported character-for-character from objections.py.",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.18.4",
+    "vitest": "^4.1.10",
+    "wrangler": "^4.110.0"
+  },
+  "allowScripts": {
+    "workerd@1.20260708.1": true
+  }
+}

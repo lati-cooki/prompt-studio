@@ -278,5 +278,99 @@ class TestPostureHonesty(FrontDoorCase):
                           objections.posture_note())
 
 
+# ---------------------------------------------------------------------------
+# Deliverable 3 — share/receipt URLs from config, never the Host header
+
+
+class TestConfigUrls(FrontDoorCase):
+    PUB = "https://objections.example.com"
+    HUB = "https://hub.example.com"
+
+    def _mint_with_host(self, host="evil.example.com:1337"):
+        p = self._open_promotion()
+        h = self._h()
+        h.path = f"/api/promotions/{p['id']}/tokens"
+        h._set_body(b"{}")
+        h._mock_headers["Host"] = host
+        h.do_POST()
+        self.assertEqual(h._last_status, 200)
+        return h._json()
+
+    def test_mint_url_ignores_host_header_when_base_unset(self):
+        minted = self._mint_with_host()
+        self.assertNotIn("evil.example.com", minted["url"])
+        self.assertEqual(minted["url"],
+                         f"http://localhost:{server.PORT}/object/{minted['token']}")
+
+    def test_mint_url_uses_public_base_when_set(self):
+        with patch.object(objections, "PUBLIC_BASE_URL", self.PUB):
+            minted = self._mint_with_host()
+        self.assertEqual(minted["url"], f"{self.PUB}/object/{minted['token']}")
+
+    def test_filing_receipt_status_url_uses_public_base(self):
+        p, minted = self._minted()
+        with patch.object(objections, "PUBLIC_BASE_URL", self.PUB):
+            h, _ = self._file(minted["token"])
+        receipt = h._json()
+        self.assertEqual(
+            receipt["status_url"],
+            f"{self.PUB}/object/{minted['token']}/status/{receipt['objection_id']}")
+
+    def _sealed_receipt(self):
+        """File, resolve, close with a mocked seal; return the status body."""
+        p, minted = self._minted()
+        h, _ = self._file(minted["token"])
+        oid = h._json()["objection_id"]
+        self.anchor.execute(
+            "UPDATE promotions SET closes_at='2000-01-01T00:00:00Z' WHERE id=?",
+            (p["id"],))
+        self.anchor.execute(
+            "UPDATE promotion_objections SET resolution='responded',"
+            " resolution_body='ok' WHERE promotion_id=?", (p["id"],))
+        self.anchor.commit()
+        records = [
+            {"seq": 0, "record_hash": "sha256:g0", "event_type": "ThreadCreated"},
+            {"seq": 1, "record_hash": "sha256:obj1",
+             "event_type": "ObjectionRaised"}]
+        with patch("seal.seal_decision",
+                   return_value={"slug": "promo-thread",
+                                 "citationHash": "sha256:head",
+                                 "records": records}):
+            hc = self._h()
+            hc.path = f"/api/promotions/{p['id']}/close"
+            hc._set_body(b"")
+            hc.do_POST()
+        self.assertEqual(hc._json()["sealed"], 1)
+        s = self._h()
+        s.path = f"/object/{minted['token']}/status/{oid}"
+        s.do_GET()
+        self.assertEqual(s._last_status, 200)
+        return s._json()
+
+    def test_receipt_hub_urls_default_to_local_hub(self):
+        body = self._sealed_receipt()
+        hub = f"http://localhost:{seal.THREADHUB_PORT}"
+        self.assertEqual(body["checker_url"], f"{hub}/verify.mjs")
+
+    def test_receipt_never_hands_a_skeptic_localhost_when_bases_set(self):
+        with patch.object(objections, "PUBLIC_BASE_URL", self.PUB), \
+             patch.object(objections, "THREADHUB_PUBLIC_BASE_URL", self.HUB):
+            body = self._sealed_receipt()
+        self.assertEqual(body["record_url"], f"{self.HUB}/r/sha256:obj1")
+        self.assertEqual(body["verify_url"],
+                         f"{self.HUB}/t/promo-thread/verify")
+        self.assertEqual(body["checker_url"], f"{self.HUB}/verify.mjs")
+        self.assertIn(f"{self.HUB}/verify.mjs", body["instructions"])
+        self.assertNotIn("localhost", json.dumps(body))
+        self.assertNotIn("127.0.0.1", json.dumps(body))
+
+    def test_host_header_never_used_for_url_construction(self):
+        # the code path is gone: no handler reads the Host header anymore
+        import inspect
+        src = inspect.getsource(server)
+        self.assertNotIn("headers.get('Host'", src)
+        self.assertNotIn('headers.get("Host"', src)
+
+
 if __name__ == "__main__":
     unittest.main()

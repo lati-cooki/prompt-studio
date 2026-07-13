@@ -385,10 +385,14 @@ def file_objection(conn, raw, body, contact, label=None):
                  (token["id"],))
     conn.commit()
     oid = cur.lastrowid
+    status_path = f"/object/{raw}/status/{oid}"
     return {
         "objection_id": oid,
         "body_hash": "sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest(),
-        "status_url": f"/object/{raw}/status/{oid}",
+        # Absolute when a public base is configured — the skeptic keeps this
+        # URL; it must resolve from THEIR machine, not just ours.
+        "status_url": (PUBLIC_BASE_URL + status_path) if PUBLIC_BASE_URL
+                      else status_path,
     }
 
 
@@ -467,7 +471,9 @@ def objection_status(conn, raw, oid):
     }
     record_hash = obj.get("sealed_record_hash")
     if record_hash and promotion.get("thread_slug"):
-        hub = f"http://localhost:{seal.THREADHUB_PORT}"
+        # The externally reachable hub when configured — a receipt must
+        # never hand an external skeptic a localhost URL.
+        hub = THREADHUB_PUBLIC_BASE_URL or f"http://localhost:{seal.THREADHUB_PORT}"
         slug = promotion["thread_slug"]
         citation = promotion.get("citation_hash")
         writer = (writers.get_writer(conn, obj["author_writer"])

@@ -1220,8 +1220,11 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 return
         finally:
             conn.close()
-        host = self.headers.get('Host') or f"localhost:{PORT}"
-        minted["url"] = f"http://{host}{minted.pop('url_path')}"
+        # Share URL from CONFIG, never the Host header (a client-controlled
+        # Host must not steer where an invitation points): STUDIO_PUBLIC_BASE_URL
+        # when configured, the local bind otherwise.
+        base = objections.PUBLIC_BASE_URL or f"http://localhost:{PORT}"
+        minted["url"] = f"{base}{minted.pop('url_path')}"
         self.send_json(minted)
 
     def handle_token_revoke(self, pid, token_id):

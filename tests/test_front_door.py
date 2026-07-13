@@ -502,6 +502,7 @@ class TestTimingNormalization(FrontDoorCase):
     def test_no_unknown_token_fast_path(self):
         # EVERY failure mode — the unknown token included — runs the token
         # lookup AND the promotion lookup: no early return between queries.
+        counts = {}
         for name, raw in self._failure_tokens():
             tracing = _TracingConn(self.anchor)
             with self.assertRaises(objections.TokenInvalid, msg=name):
@@ -509,6 +510,11 @@ class TestTimingNormalization(FrontDoorCase):
             joined = "\n".join(tracing.statements)
             self.assertIn("FROM fcp_tokens", joined, name)
             self.assertIn("FROM promotions", joined, name)
+            self.assertIn("FROM promotion_objections", joined, name)
+            counts[name] = len(tracing.statements)
+        # review rider: uniform DB work — the same NUMBER of statements no
+        # matter which check fails (the unknown-token dummy path included)
+        self.assertEqual(len(set(counts.values())), 1, counts)
 
     def test_hash_comparison_is_constant_time(self):
         import inspect
@@ -689,8 +695,12 @@ class TestRefusalAudit(FrontDoorCase):
         with self.assertRaises(sqlite3.IntegrityError):
             self.anchor.execute("DELETE FROM object_refusals")
         # enum discipline: unknown kinds/reasons refused at the schema
+        # (asserted with a raw INSERT — record_refusal itself never raises,
+        # by the prober-path invariant; it logs instead)
         with self.assertRaises(sqlite3.IntegrityError):
-            objections.record_refusal(self.anchor, "1.2.3.4", "page", "nope")
+            self.anchor.execute(
+                "INSERT INTO object_refusals (ts, ip, path_kind, reason_code)"
+                " VALUES ('2026-01-01T00:00:00Z', '1.2.3.4', 'page', 'nope')")
 
     def test_audit_is_local_not_hub_sealed(self):
         # per-probe hub seals would let a prober spam the permanent record;
@@ -746,6 +756,104 @@ class TestRefusalSummaryRoute(FrontDoorCase):
             self.assertEqual(h._last_status, 404)
             self.assertEqual(h._body_written,
                              objections.GENERIC_404_HTML.encode("utf-8"))
+
+
+# ---------------------------------------------------------------------------
+# Review fix (Important) — audit writes must NEVER break the prober path:
+# a failing refusal insert (disk full, locked DB, enum drift) must not turn
+# the byte-identical generic 404/429 into a dropped connection.
+
+
+class TestAuditFailureNeverBreaksProberPath(FrontDoorCase):
+    def _sabotage(self):
+        """Every audit write blows up before it can insert."""
+        return patch.object(
+            objections, "ensure_refusals_table",
+            side_effect=sqlite3.OperationalError("disk I/O error (simulated)"))
+
+    def test_page_branch(self):
+        with self._sabotage():
+            h = self._get_page("bogus")
+        self.assertEqual(h._last_status, 404)
+        self.assertEqual(h._body_written,
+                         objections.GENERIC_404_HTML.encode("utf-8"))
+
+    def test_api_branch(self):
+        with self._sabotage():
+            h = self._post_objection("bogus", {"body": "x", "contact": "a@b"})
+        self.assertEqual(h._last_status, 404)
+        self.assertEqual(h._json(), objections.GENERIC_404_JSON)
+
+    def test_status_branch(self):
+        with self._sabotage():
+            s = self._h()
+            s.path = "/object/bogus/status/1"
+            s.do_GET()
+        self.assertEqual(s._last_status, 404)
+        self.assertEqual(s._json(), objections.GENERIC_404_JSON)
+
+    def test_malformed_path_branch(self):
+        with self._sabotage():
+            h = self._h()
+            h.path = "/object/whatever/junk"
+            h.do_GET()
+        self.assertEqual(h._last_status, 404)
+        self.assertEqual(h._body_written,
+                         objections.GENERIC_404_HTML.encode("utf-8"))
+
+    def test_rate_limit_branches(self):
+        ip = "198.51.100.30"
+        with patch.object(objections, "RATE_LIMIT", 1), self._sabotage():
+            self._post_objection("bogus", {"body": "x", "contact": "a@b"},
+                                 ip=ip)
+            h = self._post_objection("bogus", {"body": "x", "contact": "a@b"},
+                                     ip=ip)
+            self.assertEqual(h._last_status, 429)
+            self.assertEqual(h._json(), objections.GENERIC_429_JSON)
+            g = self._h(ip)
+            g.path = "/object/bogus"
+            g.do_GET()
+            self.assertEqual(g._last_status, 429)
+            self.assertEqual(g._body_written,
+                             objections.GENERIC_429_HTML.encode("utf-8"))
+
+    def test_422_branch_response_unchanged(self):
+        p, minted = self._minted()
+        with self._sabotage():
+            h = self._post_objection(minted["token"], {"contact": "a@b"})
+        self.assertEqual(h._last_status, 422)
+        self.assertIn("body required", h._json()["error"])
+
+    def test_record_refusal_swallows_and_logs(self):
+        class BrokenConn:
+            def execute(self, *a, **k):
+                raise sqlite3.OperationalError("database is locked (simulated)")
+
+            def commit(self):
+                pass
+
+        with self.assertLogs(level="ERROR") as logs:
+            objections.record_refusal(BrokenConn(), "1.2.3.4", "page",
+                                      "unknown")  # must NOT raise
+        self.assertTrue(any("witness" in line for line in logs.output))
+
+
+# ---------------------------------------------------------------------------
+# Review fix (Minor) — malformed STUDIO_OBJECT_RATE still fails loud at
+# boot, but names the env var and the expected format.
+
+
+class TestRateSpecError(unittest.TestCase):
+    def test_malformed_spec_names_the_env_var(self):
+        for bad in ("abc", "10/x", "/60"):
+            with self.assertRaisesRegex(ValueError, "STUDIO_OBJECT_RATE"):
+                objections._parse_rate(bad)
+            with self.assertRaisesRegex(ValueError, "N/seconds"):
+                objections._parse_rate(bad)
+
+    def test_valid_specs_unaffected(self):
+        self.assertEqual(objections._parse_rate("10/60"), (10, 60.0))
+        self.assertEqual(objections._parse_rate("5"), (5, 60.0))
 
 
 # ---------------------------------------------------------------------------

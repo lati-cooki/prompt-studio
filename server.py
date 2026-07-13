@@ -1143,13 +1143,22 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
     def _record_refusal(self, path_kind, reason_code, token_id=None):
         """Witness a front-door refusal (Task 13, objections.record_refusal)
         on its own connection — for branches that refused before opening
-        one. Never changes the bytes the prober gets."""
-        conn = self.get_db()
+        one. NEVER raises and never changes the bytes the prober gets:
+        record_refusal already swallows-and-logs its own failures; this
+        guard additionally covers get_db()/close(), so even a connection
+        failure cannot break the generic response."""
         try:
-            objections.record_refusal(conn, self._client_ip(), path_kind,
-                                      reason_code, token_id)
-        finally:
-            conn.close()
+            conn = self.get_db()
+            try:
+                objections.record_refusal(conn, self._client_ip(), path_kind,
+                                          reason_code, token_id)
+            finally:
+                conn.close()
+        except Exception:
+            logging.error(
+                "refusal witness FAILED before recording (path_kind=%s "
+                "reason=%s); prober response unaffected",
+                path_kind, reason_code, exc_info=True)
 
     def handle_object_get(self, rest):
         parts = [urllib.parse.unquote(p) for p in rest.split('?', 1)[0].split('/')]

@@ -62,6 +62,7 @@ import hashlib
 import hmac
 import html
 import json
+import logging
 import os
 import secrets
 import time
@@ -81,9 +82,18 @@ _TS = "%Y-%m-%dT%H:%M:%SZ"
 
 
 def _parse_rate(spec):
-    """'10' -> (10, 60.0); '20/30' -> (20, 30.0): N requests per W seconds."""
-    count, _, window = (spec or "").partition("/")
-    return max(1, int(count)), (float(window) if window else 60.0)
+    """'10' -> (10, 60.0); '20/30' -> (20, 30.0): N requests per W seconds.
+    A malformed spec fails LOUD at boot — misconfiguration must not launch
+    a front door with a limiter it didn't ask for — with an error naming
+    the env var and the expected format."""
+    try:
+        count, _, window = (spec or "").partition("/")
+        return max(1, int(count)), (float(window) if window else 60.0)
+    except ValueError:
+        raise ValueError(
+            f"STUDIO_OBJECT_RATE={spec!r} is malformed — expected 'N' or "
+            "'N/seconds' (e.g. '10/60' for 10 requests per 60 seconds)"
+        ) from None
 
 
 # STUDIO_PUBLIC_MODE=1 -> serve ONLY the skeptic surface (server._front_door).
@@ -238,15 +248,26 @@ def ensure_refusals_table(conn):
 def record_refusal(conn, ip, path_kind, reason_code, token_id=None):
     """Append one refusal witness (local by design — see the module
     docstring: hub-sealing per probe would let a prober spam the permanent
-    record). Never alters the prober-visible response: callers record and
-    then send the same generic bytes they always sent. token_id is set only
-    when the token was valid enough to identify."""
-    ensure_refusals_table(conn)
-    conn.execute(
-        "INSERT INTO object_refusals (ts, ip, path_kind, reason_code, token_id)"
-        " VALUES (?,?,?,?,?)",
-        (_iso(_now()), ip or "?", path_kind, reason_code, token_id))
-    conn.commit()
+    record). token_id is set only when the token was valid enough to
+    identify.
+
+    NEVER raises: the prober's byte-identical generic response outranks
+    the witness. An audit-write failure (disk full, locked DB, enum drift)
+    must not turn a 404/429 into a dropped connection — that would make
+    audit health itself an observable oracle. The failure is witnessed the
+    only way left: logging.error, loud in the server log."""
+    try:
+        ensure_refusals_table(conn)
+        conn.execute(
+            "INSERT INTO object_refusals"
+            " (ts, ip, path_kind, reason_code, token_id) VALUES (?,?,?,?,?)",
+            (_iso(_now()), ip or "?", path_kind, reason_code, token_id))
+        conn.commit()
+    except Exception:
+        logging.error(
+            "object_refusals witness FAILED (path_kind=%s reason=%s) — "
+            "refusal not recorded; prober response unaffected",
+            path_kind, reason_code, exc_info=True)
 
 
 def refusal_summary(conn, window_days=None):
@@ -389,12 +410,14 @@ def validate_token(conn, raw):
 
     TIMING NOTE (Task 13): perfect timing invariance is not achievable in
     Python (allocation, dict handling, sqlite plan variance all leak a
-    little), but the gross channel is eliminated: EVERY failure mode
-    computes the token hash, runs the token lookup AND the promotion
-    lookup (fetch-then-evaluate, no early return between queries — the
-    unknown-token case runs them over a dummy row), and compares hashes
-    with hmac.compare_digest. No unknown-token fast path vs known-token
-    slow path."""
+    little — e.g. get_promotion's dict/json/datetime work when a promotion
+    exists), but the gross channel is eliminated: EVERY failure mode
+    computes the token hash, runs the SAME NUMBER of DB statements (token
+    lookup + get_promotion's promotion and objections queries; the
+    unknown-token dummy path runs a compensating objections query so it is
+    not one statement lighter), and compares hashes with
+    hmac.compare_digest. No unknown-token fast path vs known-token slow
+    path."""
     ensure_tokens_table(conn)
     supplied = hash_token(raw or "")
     row = conn.execute("SELECT * FROM fcp_tokens WHERE token_hash=?",
@@ -408,6 +431,14 @@ def validate_token(conn, raw):
     try:
         promotion = promotion_store.get_promotion(conn, token["promotion_id"])
     except promotion_store.PromotionError:
+        # uniform DB work: a found promotion costs get_promotion a second
+        # query (its objections list); run the same-shaped statement here so
+        # the missing-promotion path (the unknown-token dummy) issues the
+        # same number of statements. Mirrors get_promotion's objections
+        # query deliberately.
+        conn.execute(
+            "SELECT * FROM promotion_objections WHERE promotion_id=?"
+            " ORDER BY id", (token["promotion_id"],)).fetchall()
         promotion = None
     not_open = promotion is None or promotion["state"] != promotion_store.OPEN
     if not hash_ok:

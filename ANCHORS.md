@@ -24,3 +24,4 @@ the canonical artifacts (rules 4.3 and 2.1).
 | 2026-07-13T03:14:00Z | challenge-agent-operational-checklist-purpose-fit-directive-v1-1 | sha256:da86708117c8deeb4216fa622abe32d1b345de7ee555da9f9a8886129ddb9437 | 14 | thd_bc679070f90a |  |
 | 2026-07-13T03:18:17Z | promote-agent-operational-checklist-v1-1-0-to-production | sha256:a5e06febaf342c31ed20018b8cb39ef9ec4502b4bbddf27cd11d04b453d0b43f | 8 | thd_4773b17369c9 |  |
 | 2026-07-13T05:22:06Z | prompt-studio-2026-07-13-phase-5-ships | sha256:738a304e511429219eafa6084e189ac9093e73648da022cdc610ed4fa706c6c7 | 10 | thd_80c47882fb67 |  |
+| 2026-07-13T06:45:03Z | dr-2026-07-13-record-is-the-interface | sha256:f188271ee3d7072378cc5ba59d7efbe8dd2906bb79180f6ad4cbb36d926361ee | 8 | thd_bb82066ad694 |  |

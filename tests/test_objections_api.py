@@ -563,10 +563,14 @@ class TestStatusReceipt(TokenPathTestCase):
         self.assertEqual(h._json()["promotion_state"], "closed")
 
     def test_status_404s_are_generic(self):
+        # NOTE: a REVOKED token is deliberately NOT a failure mode here —
+        # revocation kills future filing, not the status route (see
+        # test_revoked_token_still_reads_own_status). The remaining modes
+        # stay byte-identical.
         p, minted, receipt = self._filed()
         oid = receipt["objection_id"]
         bodies = set()
-        # unknown token / wrong objection / non-integer oid / revoked token
+        # unknown token / wrong objection / non-integer oid
         for raw, o in (("bogus", oid), (minted["token"], oid + 99),
                        (minted["token"], "abc")):
             h = self._status(raw, o)
@@ -578,13 +582,50 @@ class TestStatusReceipt(TokenPathTestCase):
         h = self._status(other._json()["token"], oid)
         self.assertEqual(h._last_status, 404)
         bodies.add(h._body_written)
+        self.assertEqual(len(bodies), 1)  # byte-identical across all modes
+
+    def test_revoked_token_still_reads_own_status(self):
+        """POLICY (controller-decided): a revoked token remains valid on the
+        STATUS route only, for its own objections. The status route files
+        nothing and reveals nothing the hub does not already serve publicly;
+        revocation kills future FILING, not the DR 5.6 disclosure guarantee
+        for already-filed objections — an operator action must not silently
+        sever an objector from their receipt."""
+        p, minted, receipt = self._filed()
         self.anchor.execute("UPDATE fcp_tokens SET revoked=1 WHERE id=?",
                             (minted["token_id"],))
         self.anchor.commit()
-        h = self._status(minted["token"], oid)
+        h = self._status(minted["token"], receipt["objection_id"])
+        self.assertEqual(h._last_status, 200)
+        body = h._json()
+        self.assertEqual(body["status"], "filed")
+        self.assertEqual(body["objection_id"], receipt["objection_id"])
+        self.assertEqual(body["body_hash"], receipt["body_hash"])
+        # ...but ONLY its own: another token's objection is still generic 404
+        other = self._mint(p["id"], {"use_limit": 1})._json()
+        self.anchor.execute("UPDATE fcp_tokens SET revoked=1 WHERE id=?",
+                            (other["token_id"],))
+        self.anchor.commit()
+        h = self._status(other["token"], receipt["objection_id"])
         self.assertEqual(h._last_status, 404)
-        bodies.add(h._body_written)
-        self.assertEqual(len(bodies), 1)  # byte-identical across all modes
+
+    def test_revoked_token_filing_still_generic_404(self):
+        """Revocation still kills FILING dead — and indistinguishably from
+        every other filing failure (no oracle)."""
+        p, minted = self._minted(mint_body={"use_limit": 5})
+        self.anchor.execute("UPDATE fcp_tokens SET revoked=1 WHERE id=?",
+                            (minted["token_id"],))
+        self.anchor.commit()
+        h = self._post_objection(minted["token"],
+                                 {"body": "x", "contact": "a@b.c"})
+        self.assertEqual(h._last_status, 404)
+        unknown = self._post_objection("bogus",
+                                       {"body": "x", "contact": "a@b.c"})
+        self.assertEqual(unknown._last_status, 404)
+        self.assertEqual(h._body_written, unknown._body_written)
+        # the page route also still refuses a revoked token
+        page = self._get_page(minted["token"])
+        self.assertEqual(page._last_status, 404)
 
     def _close_sealed(self, p, records):
         """Elapse the window, resolve open objections inline (Phase 4 form),
@@ -683,6 +724,57 @@ class TestStatusReceipt(TokenPathTestCase):
             "SELECT sealed_record_hash FROM promotion_objections"
             " WHERE promotion_id=?", (p["id"],)).fetchall()
         self.assertEqual([r["sealed_record_hash"] for r in rows], [None, None])
+
+    def test_midloop_backfill_failure_rolls_back_partial_updates(self):
+        """The count assertion protects the MISMATCH mode; this protects the
+        mid-loop failure mode: if an UPDATE dies after some rows were
+        already updated (uncommitted), _seal_promotion must roll the
+        transaction back BEFORE recording the seal_error — otherwise
+        mark_seal_result's commit would smuggle the partial back-fill in,
+        violating the unconditional 'NO partial back-fill' invariant."""
+        p, minted, r1 = self._filed(use_limit=2)
+        self._file(minted["token"], body="second concern",
+                   contact="carol@y.org")
+
+        real_backfill = objections.backfill_sealed_records
+
+        class SabotagedConn:
+            """Proxy conn: the FIRST sealed_record_hash UPDATE goes through
+            (and sits uncommitted); the SECOND raises mid-loop."""
+
+            def __init__(self, conn):
+                self._conn = conn
+                self._updates = 0
+
+            def execute(self, sql, *args):
+                if "SET sealed_record_hash" in sql:
+                    self._updates += 1
+                    if self._updates == 2:
+                        raise sqlite3.OperationalError(
+                            "disk I/O error (simulated mid-loop)")
+                return self._conn.execute(sql, *args)
+
+            def __getattr__(self, name):
+                return getattr(self._conn, name)
+
+        def sabotaged(conn, promotion, records, slug=None):
+            return real_backfill(SabotagedConn(conn), promotion, records,
+                                 slug=slug)
+
+        with patch("objections.backfill_sealed_records", sabotaged):
+            h = self._close_sealed(
+                p, self._records_with_objections(["sha256:objA",
+                                                  "sha256:objB"]))
+        result = h._json()
+        self.assertEqual(result["sealed"], 0)
+        self.assertIn("disk I/O error", result["seal_error"])
+        # NO partial back-fill: the first (successful, uncommitted) UPDATE
+        # must have been rolled back, not committed beside the error.
+        rows = self.anchor.execute(
+            "SELECT sealed_record_hash FROM promotion_objections"
+            " WHERE promotion_id=?", (p["id"],)).fetchall()
+        self.assertEqual([r["sealed_record_hash"] for r in rows],
+                         [None, None])
 
     def test_legacy_seal_return_without_records_skips_backfill(self):
         # a mocked/legacy seal return with no 'records' key must neither

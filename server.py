@@ -868,6 +868,12 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 conn, promotion["id"], slug=result["slug"],
                 citation_hash=result.get("citationHash"))
         except Exception as e:
+            # FIRST: discard any uncommitted work from the failed attempt —
+            # a mid-loop back-fill failure leaves earlier UPDATEs pending on
+            # this conn, and mark_seal_result ends in conn.commit(), which
+            # would otherwise smuggle a PARTIAL back-fill in beside the error
+            # bookkeeping (the count assertion only guards the mismatch mode).
+            conn.rollback()
             msg = getattr(e, "message", None) or str(e)
             return promotion_store.mark_seal_result(conn, promotion["id"], error=msg)
         p.update(anchors.anchor_seal(result["slug"]))

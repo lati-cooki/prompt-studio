@@ -17,6 +17,7 @@ the push is what makes it external, and the two are reported separately.
 """
 import os
 import subprocess
+import threading
 from datetime import datetime, timezone
 
 import seal
@@ -24,6 +25,15 @@ import seal
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 ANCHORS_FILE = "ANCHORS.md"
 GIT_TIMEOUT = 60  # seconds per git command
+
+# anchor_seal is no longer single-threaded: the Slice 7 challenge worker
+# anchors from a daemon thread while request-thread seals anchor
+# concurrently. The whole operation — read prior_size, append the row, git
+# add/commit/push, and the truncate-based rollback — is one critical
+# section: an interleaved append would land inside another anchor's
+# prior_size→truncate window (its row silently eaten on that anchor's
+# failure), and concurrent git add/commit race the index.
+_ANCHOR_LOCK = threading.Lock()
 
 
 def now_iso():
@@ -66,7 +76,11 @@ def anchor_seal(slug, repo_root=None, note=""):
     """
     repo_root = repo_root or REPO_ROOT
     try:
-        return _anchor(slug, repo_root, note)
+        # Serialize the entire anchor (see _ANCHOR_LOCK above): the hub
+        # verify inside _anchor rides along — the lock guards correctness
+        # first; anchor throughput is not a concern at this scale.
+        with _ANCHOR_LOCK:
+            return _anchor(slug, repo_root, note)
     except Exception as e:  # catch-all keeps the no-raise contract absolute
         msg = getattr(e, "message", None) or str(e)
         return {"anchored": False,

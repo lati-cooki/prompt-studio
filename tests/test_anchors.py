@@ -10,6 +10,8 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -212,6 +214,55 @@ class TestAnchorSealFailures(AnchorTestCase):
         result = anchors.anchor_seal("ship-it", repo_root=self.repo)
         self.assertEqual(result["anchored"], False)
         self.assertIn("totally unexpected", result["anchor_error"])
+
+
+class TestAnchorConcurrency(AnchorTestCase):
+    """anchor_seal is no longer single-threaded: the Slice 7 challenge worker
+    anchors from a daemon thread while request-thread seals anchor
+    concurrently. The whole read-prior-size → append → git → rollback
+    sequence must be serialized by anchors._ANCHOR_LOCK — otherwise a
+    failing anchor's truncate-based rollback can eat a row a concurrent
+    anchor appended in between (and concurrent git add/commit race the
+    index)."""
+
+    def test_failing_anchors_rollback_cannot_eat_a_concurrent_row(self):
+        def fake_th(method, path):
+            slug = path.split("/")[2]
+            return {**VERIFY, "slug": slug, "head": f"sha256:head-{slug}"}
+
+        def fake_git(args, repo_root):
+            # Thread A stalls inside its critical section (after its row is
+            # on disk, before its rollback), then fails at commit. Unserialized,
+            # B's row lands inside that window and A's truncate deletes it.
+            if threading.current_thread().name == "anchor-A":
+                if args[0] == "add":
+                    time.sleep(0.5)
+                if args[0] == "commit":
+                    return False, "git commit failed: simulated"
+            return True, ""
+
+        results = {}
+        with patch("seal._th", side_effect=fake_th), \
+             patch("anchors._git", side_effect=fake_git):
+            t_a = threading.Thread(
+                target=lambda: results.update(
+                    a=anchors.anchor_seal("slug-a", repo_root=self.repo)),
+                name="anchor-A")
+            t_a.start()
+            time.sleep(0.1)  # A is now inside its critical section
+            results["b"] = anchors.anchor_seal("slug-b", repo_root=self.repo)
+            t_a.join(timeout=10)
+        self.assertFalse(t_a.is_alive())
+        self.assertFalse(results["a"]["anchored"])
+        self.assertIn("simulated", results["a"]["anchor_error"])
+        self.assertTrue(results["b"]["anchored"])
+        content = self._content()
+        self.assertIn("head-slug-b", content)     # B's row survived A's rollback
+        self.assertNotIn("head-slug-a", content)  # A's row fully rolled back
+        # well-formed: the header's two lines + exactly one data row
+        self.assertTrue(content.startswith(HEADER))
+        lines = [line for line in content.splitlines() if line.strip()]
+        self.assertEqual(len(lines), 3)
 
 
 class TestAnchorsFileHeader(unittest.TestCase):

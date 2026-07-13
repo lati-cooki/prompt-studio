@@ -20,6 +20,11 @@ Token rules:
   uses < use_limit, window still open, promotion still in an open FCP state.
   EVERY failure raises the same TokenInvalid and every route answers with
   one byte-identical generic 404 — no oracle for which check failed.
+- EXCEPTION (controller-decided): the STATUS route accepts a revoked token
+  for its own objections. It files nothing and reveals nothing the hub does
+  not already serve publicly; revocation kills future filing, not the
+  DR 5.6 disclosure guarantee for already-filed objections — revoking must
+  not silently sever an objector from their receipt.
 
 Privacy: the objector's contact string stays in the studio DB. It reaches
 the hub in NO payload — the writer name "objector:<contact>" is local-only
@@ -333,19 +338,26 @@ def file_objection(conn, raw, body, contact, label=None):
 # status / receipt — phase two of the two-phase receipt
 
 def _validate_token_for_status(conn, raw, oid):
-    """Weaker validation for the receipt route: the token must exist, be
-    unrevoked, and OWN the objection — but exhaustion and window close do
-    NOT block it. The receipt must outlive the window that produced it
-    (post-seal is exactly when it matters). Failures are still the one
-    generic TokenInvalid."""
+    """Weaker validation for the receipt route: the token must exist and OWN
+    the objection — but revocation, exhaustion and window close do NOT block
+    it. The receipt must outlive the window that produced it (post-seal is
+    exactly when it matters). Failures are still the one generic
+    TokenInvalid.
+
+    REVOKED TOKENS (controller-decided policy): a revoked token remains
+    valid on THIS route only, for its own objections. The status route files
+    nothing and reveals nothing the hub does not already serve publicly
+    (record hashes, thread slug, verify URLs — never contact data);
+    revocation kills future FILING (validate_token, unchanged), not the
+    DR 5.6 disclosure guarantee for already-filed objections — an operator
+    action must not silently sever an objector from their receipt."""
     ensure_tokens_table(conn)
     row = conn.execute("SELECT * FROM fcp_tokens WHERE token_hash=?",
                        (hash_token(raw or ""),)).fetchone()
     if row is None:
         raise TokenInvalid()
     token = dict(row)
-    if token["revoked"]:
-        raise TokenInvalid()
+    # deliberately NO revoked check here — see the policy note above
     try:
         oid = int(oid)
     except (TypeError, ValueError):

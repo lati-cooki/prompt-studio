@@ -841,11 +841,21 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         anchor_pushed/anchor_push_error fields ride on the response. Anchoring
         happens OUTSIDE the try: anchor_seal never raises by contract, and an
         anchoring failure must never be recorded as a seal_error — the seal
-        exists in the hub regardless (rule 2.1)."""
+        exists in the hub regardless (rule 2.1).
+
+        Slice 6: when the seal return carries the extended per-record list,
+        each objection's sealed_record_hash is back-filled from the n-th
+        ObjectionRaised record (count-asserted: a mismatch is recorded as a
+        seal_error with NO partial back-fill — see
+        objections.backfill_sealed_records). A legacy return without
+        'records' skips back-fill; those receipts simply stay at 'filed'."""
         try:
             writer_map, decided_by = self._writers_for_promotion(conn, promotion)
             payload = promotion_seal.build_seal_payload(promotion, outcome, decided_by)
             result = seal.seal_decision(payload, writers=writer_map)
+            if "records" in result:
+                objections.backfill_sealed_records(
+                    conn, promotion, result["records"], slug=result.get("slug"))
             p = promotion_store.mark_seal_result(
                 conn, promotion["id"], slug=result["slug"],
                 citation_hash=result.get("citationHash"))

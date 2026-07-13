@@ -671,13 +671,20 @@ class TestSealWriterWiring(PromotionApiTestCase):
             h2._set_body(json.dumps({"resolution": "responded", "body": "ok"}).encode())
             h2.do_POST()
 
+        # Slice 6 count-asserts the back-fill: a seal return must carry one
+        # ObjectionRaised record per stored objection or it is a seal_error.
+        objection_records = [
+            {"seq": 4, "record_hash": "sha256:o1", "event_type": "ObjectionRaised"},
+            {"seq": 5, "record_hash": "sha256:o2", "event_type": "ObjectionRaised"}]
         with patch("seal.seal_decision",
-                   return_value={"slug": "s", "citationHash": "h", "records": []}) as mock_seal:
+                   return_value={"slug": "s", "citationHash": "h",
+                                 "records": objection_records}) as mock_seal:
             h3 = self._h()
             h3.path = f"/api/promotions/{pid}/close"
             h3._set_body(b"")
             h3.do_POST()
 
+        self.assertEqual(h3._json()["sealed"], 1)
         writers_map = mock_seal.call_args.kwargs["writers"]
         # objections were raised by the operator (default actor)
         self.assertEqual(writers_map["objections"], ["id_troy", "id_troy"])
@@ -800,7 +807,9 @@ class TestSealWriterWiring(PromotionApiTestCase):
         self.anchor.commit()
 
         with patch("seal.seal_decision",
-                   return_value={"slug": "s", "citationHash": "h", "records": []}) as mock_seal:
+                   return_value={"slug": "s", "citationHash": "h",
+                                 "records": [{"seq": 4, "record_hash": "sha256:o1",
+                                              "event_type": "ObjectionRaised"}]}) as mock_seal:
             h4 = self._h()
             h4.path = f"/api/promotions/{pid}/reseal"
             h4._set_body(b"")

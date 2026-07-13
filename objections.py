@@ -328,6 +328,132 @@ def file_objection(conn, raw, body, contact, label=None):
 
 
 # ---------------------------------------------------------------------------
+# status / receipt — phase two of the two-phase receipt
+
+def _validate_token_for_status(conn, raw, oid):
+    """Weaker validation for the receipt route: the token must exist, be
+    unrevoked, and OWN the objection — but exhaustion and window close do
+    NOT block it. The receipt must outlive the window that produced it
+    (post-seal is exactly when it matters). Failures are still the one
+    generic TokenInvalid."""
+    ensure_tokens_table(conn)
+    row = conn.execute("SELECT * FROM fcp_tokens WHERE token_hash=?",
+                       (hash_token(raw or ""),)).fetchone()
+    if row is None:
+        raise TokenInvalid()
+    token = dict(row)
+    if token["revoked"]:
+        raise TokenInvalid()
+    try:
+        oid = int(oid)
+    except (TypeError, ValueError):
+        raise TokenInvalid()
+    obj = conn.execute("SELECT * FROM promotion_objections WHERE id=?",
+                       (oid,)).fetchone()
+    if obj is None:
+        raise TokenInvalid()
+    obj = dict(obj)
+    if obj.get("token_id") is None or int(obj["token_id"]) != token["id"]:
+        raise TokenInvalid()  # a token reads only its own objections
+    return token, obj
+
+
+def _receipt_instructions(hub, slug, citation_hash, record_hash):
+    return (
+        "Verify this objection yourself, from any machine with Node:\n"
+        f"  1. Save the checker:  curl -o verify.mjs {hub}/verify.mjs\n"
+        f"  2. Save the thread:   curl -o thread.json {hub}/t/{slug}.json\n"
+        "  3. Run the checker:   node verify.mjs thread.json\n"
+        "It prints 'PASS: <n> records, head <hash>, signatures verified "
+        "k/n'. Compare that head to this receipt's citation_hash "
+        f"({citation_hash}) — they must match, and your objection is the "
+        f"record {record_hash} inside that chain ({hub}/r/{record_hash}). "
+        "A PASS proves chain integrity — your objection was recorded, "
+        "unaltered, in sequence, with how many records were signed "
+        "disclosed (signatures verified k/n). It proves recording, NOT "
+        "truth. Run it on your own machine against a saved copy: a verdict "
+        "produced by the hub's own host is not independent.")
+
+
+def objection_status(conn, raw, oid):
+    """GET /object/<token>/status/<oid> — pre-seal: {status: 'filed'};
+    post-seal: the full receipt (record_hash + thread_slug + citation_hash
+    + record_url + verify_url + checker_url + DR 5.6 custody disclosure +
+    runnable checker instructions). This is the conversion moment: the
+    receipt lets the objector verify their own objection with no account
+    and no trust in this server."""
+    token, obj = _validate_token_for_status(conn, raw, oid)
+    try:
+        promotion = promotion_store.get_promotion(conn, obj["promotion_id"])
+    except promotion_store.PromotionError:
+        raise TokenInvalid()
+    base = {
+        "objection_id": obj["id"],
+        "body_hash": "sha256:"
+                     + hashlib.sha256(obj["body"].encode("utf-8")).hexdigest(),
+        "promotion_state": promotion["state"],
+    }
+    record_hash = obj.get("sealed_record_hash")
+    if record_hash and promotion.get("thread_slug"):
+        hub = f"http://localhost:{seal.THREADHUB_PORT}"
+        slug = promotion["thread_slug"]
+        citation = promotion.get("citation_hash")
+        writer = (writers.get_writer(conn, obj["author_writer"])
+                  if obj.get("author_writer") else None)
+        custody = (_custody_disclosure_for(writer) if writer
+                   else CUSTODY_DISCLOSURE_MINT)
+        return {
+            **base,
+            "status": "sealed",
+            "record_hash": record_hash,
+            "thread_slug": slug,
+            "citation_hash": citation,
+            "record_url": f"{hub}/r/{record_hash}",
+            "verify_url": f"{hub}/t/{slug}/verify",
+            "checker_url": f"{hub}/verify.mjs",
+            "custody": custody,
+            "instructions": _receipt_instructions(hub, slug, citation,
+                                                  record_hash),
+        }
+    return {**base, "status": "filed", "sealed": bool(promotion.get("sealed"))}
+
+
+# ---------------------------------------------------------------------------
+# seal back-fill — sealed_record_hash from the extended seal return
+
+class BackfillMismatch(Exception):
+    """Stored objections and ObjectionRaised records disagree in count.
+    The seal path records this as seal_error; NOTHING is back-filled."""
+
+
+def backfill_sealed_records(conn, promotion, records, slug=None):
+    """Match the promotion's objections (ordered by id — the SAME ordering
+    _author_for_event uses for the n-th ObjectionRaised writer mapping, same
+    source of truth: promotion['objections']) to the ObjectionRaised records
+    of write_to_threadhub's extended return, in order, and write each
+    sealed_record_hash.
+
+    The count assertion runs BEFORE any UPDATE: on mismatch nothing is
+    back-filled and BackfillMismatch propagates — _seal_promotion records it
+    as seal_error. The hub thread exists regardless (the seal already
+    happened); the error message says so instead of pretending otherwise."""
+    objs = promotion.get("objections") or []
+    obj_records = [r for r in (records or [])
+                   if r.get("event_type") == "ObjectionRaised"]
+    if len(obj_records) != len(objs):
+        raise BackfillMismatch(
+            f"objection back-fill count mismatch: {len(objs)} stored "
+            f"objection(s) vs {len(obj_records)} ObjectionRaised record(s) "
+            f"in thread '{slug}' — refusing partial back-fill (the hub "
+            "thread exists; recorded as seal_error for reseal)")
+    for o, r in zip(objs, obj_records):
+        conn.execute(
+            "UPDATE promotion_objections SET sealed_record_hash=? WHERE id=?",
+            (r.get("record_hash"), o["id"]))
+    conn.commit()
+
+
+# ---------------------------------------------------------------------------
 # standalone page — server-rendered string template, no studio shell
 
 def _e(v):

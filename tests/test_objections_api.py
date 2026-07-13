@@ -488,5 +488,176 @@ class TestRateLimit(TokenPathTestCase):
         self.assertEqual(h2._last_status, 200)
 
 
+class TestStatusReceipt(TokenPathTestCase):
+    """Two-phase receipts: pre-seal {status: filed}, post-seal the full
+    verifiable receipt with the DR 5.6 custody disclosure and runnable
+    checker instructions. The status route re-validates the token but stays
+    readable post-close and post-exhaustion — the receipt must outlive the
+    window that produced it."""
+
+    def _status(self, raw, oid):
+        h = self._h()
+        h.path = f"/object/{raw}/status/{oid}"
+        h.do_GET()
+        return h
+
+    def _filed(self, **mint_body):
+        p, minted = self._minted(mint_body=mint_body or None)
+        h, _ = self._file(minted["token"])
+        return p, minted, h._json()
+
+    def test_pre_seal_status_is_filed(self):
+        p, minted, receipt = self._filed()
+        h = self._status(minted["token"], receipt["objection_id"])
+        self.assertEqual(h._last_status, 200)
+        body = h._json()
+        self.assertEqual(body["status"], "filed")
+        self.assertEqual(body["objection_id"], receipt["objection_id"])
+        self.assertEqual(body["body_hash"], receipt["body_hash"])
+        self.assertEqual(body["promotion_state"], "open")
+
+    def test_status_readable_after_exhaustion_and_close(self):
+        p, minted, receipt = self._filed()  # use_limit 1, now exhausted
+        self.anchor.execute("UPDATE promotions SET state='closed' WHERE id=?",
+                            (p["id"],))
+        self.anchor.commit()
+        h = self._status(minted["token"], receipt["objection_id"])
+        self.assertEqual(h._last_status, 200)
+        self.assertEqual(h._json()["promotion_state"], "closed")
+
+    def test_status_404s_are_generic(self):
+        p, minted, receipt = self._filed()
+        oid = receipt["objection_id"]
+        bodies = set()
+        # unknown token / wrong objection / non-integer oid / revoked token
+        for raw, o in (("bogus", oid), (minted["token"], oid + 99),
+                       (minted["token"], "abc")):
+            h = self._status(raw, o)
+            self.assertEqual(h._last_status, 404, (raw, o))
+            bodies.add(h._body_written)
+        # an objection belonging to a DIFFERENT token
+        other = self._mint(p["id"], {"use_limit": 1})
+        self.assertEqual(other._last_status, 200)
+        h = self._status(other._json()["token"], oid)
+        self.assertEqual(h._last_status, 404)
+        bodies.add(h._body_written)
+        self.anchor.execute("UPDATE fcp_tokens SET revoked=1 WHERE id=?",
+                            (minted["token_id"],))
+        self.anchor.commit()
+        h = self._status(minted["token"], oid)
+        self.assertEqual(h._last_status, 404)
+        bodies.add(h._body_written)
+        self.assertEqual(len(bodies), 1)  # byte-identical across all modes
+
+    def _close_sealed(self, p, records):
+        """Elapse the window, resolve open objections inline (Phase 4 form),
+        and close through the API with a mocked seal returning `records`."""
+        self.anchor.execute(
+            "UPDATE promotions SET closes_at='2000-01-01T00:00:00Z' WHERE id=?",
+            (p["id"],))
+        self.anchor.execute(
+            "UPDATE promotion_objections SET resolution='responded',"
+            " resolution_body='addressed' WHERE promotion_id=?", (p["id"],))
+        self.anchor.commit()
+        ret = {"slug": "promo-thread", "citationHash": "sha256:head"}
+        if records is not None:
+            ret["records"] = records
+        with patch("seal.seal_decision", return_value=ret):
+            h = self._h()
+            h.path = f"/api/promotions/{p['id']}/close"
+            h._set_body(b"")
+            h.do_POST()
+        return h
+
+    def _records_with_objections(self, hashes):
+        recs = [{"seq": 0, "record_hash": "sha256:g0", "event_type": "ThreadCreated"},
+                {"seq": 1, "record_hash": "sha256:g1", "event_type": "ParticipantDeclared"},
+                {"seq": 2, "record_hash": "sha256:g2", "event_type": "EvidenceCommitted"},
+                {"seq": 3, "record_hash": "sha256:g3", "event_type": "ClaimCreated"}]
+        for i, rh in enumerate(hashes):
+            recs.append({"seq": 4 + i, "record_hash": rh,
+                         "event_type": "ObjectionRaised"})
+        return recs
+
+    def test_post_seal_receipt_full_shape(self):
+        p, minted, receipt = self._filed(invitee_label="outside skeptic")
+        oid = receipt["objection_id"]
+        h = self._close_sealed(p, self._records_with_objections(["sha256:obj1"]))
+        self.assertEqual(h._json()["sealed"], 1)
+
+        s = self._status(minted["token"], oid)
+        self.assertEqual(s._last_status, 200)
+        body = s._json()
+        hub = f"http://localhost:{seal.THREADHUB_PORT}"
+        self.assertEqual(body["status"], "sealed")
+        self.assertEqual(body["record_hash"], "sha256:obj1")
+        self.assertEqual(body["thread_slug"], "promo-thread")
+        self.assertEqual(body["citation_hash"], "sha256:head")
+        self.assertEqual(body["record_url"], f"{hub}/r/sha256:obj1")
+        self.assertEqual(body["verify_url"], f"{hub}/t/promo-thread/verify")
+        self.assertEqual(body["checker_url"], f"{hub}/verify.mjs")
+        # DR 5.6 custody disclosure: custodial identity, downgraded
+        # independence, upgrade path — on the receipt, no hub query needed
+        custody = body["custody"]
+        self.assertIn("5.6", custody)
+        self.assertIn("custodial", custody.lower())
+        self.assertIn("id_obj", custody)              # the actual hub identity
+        self.assertIn("outside skeptic", custody)     # its display name
+        self.assertIn("downgraded", custody.lower())
+        self.assertIn("upgrade path", custody.lower())
+        self.assertNotIn("bob@x.com", json.dumps(body))  # contact stays local
+        # runnable instructions: save checker, fetch thread, run, compare
+        instr = body["instructions"]
+        self.assertIn(f"{hub}/verify.mjs", instr)
+        self.assertIn(f"{hub}/t/promo-thread.json", instr)
+        self.assertIn("node verify.mjs", instr)
+        self.assertIn("sha256:head", instr)  # the citation hash to compare
+        self.assertIn("signatures verified", instr)
+        self.assertIn("not", instr.lower())  # proves recording, not truth
+
+    def test_backfill_writes_hashes_in_objection_order(self):
+        p, minted, r1 = self._filed(use_limit=2)
+        h2, _ = self._file(minted["token"], body="second concern",
+                           contact="carol@y.org")
+        r2 = h2._json()
+        h = self._close_sealed(
+            p, self._records_with_objections(["sha256:objA", "sha256:objB"]))
+        self.assertEqual(h._json()["sealed"], 1)
+        rows = self.anchor.execute(
+            "SELECT id, sealed_record_hash FROM promotion_objections"
+            " WHERE promotion_id=? ORDER BY id", (p["id"],)).fetchall()
+        self.assertEqual([r["sealed_record_hash"] for r in rows],
+                         ["sha256:objA", "sha256:objB"])
+        self.assertEqual([r["id"] for r in rows],
+                         [r1["objection_id"], r2["objection_id"]])
+
+    def test_backfill_count_mismatch_is_seal_error_no_partial(self):
+        p, minted, r1 = self._filed(use_limit=2)
+        self._file(minted["token"], body="second concern",
+                   contact="carol@y.org")
+        # hub return claims only ONE ObjectionRaised for TWO stored objections
+        h = self._close_sealed(
+            p, self._records_with_objections(["sha256:only-one"]))
+        result = h._json()
+        self.assertEqual(result["sealed"], 0)
+        self.assertIn("mismatch", result["seal_error"])
+        # NO partial back-fill: not a single row got a hash
+        rows = self.anchor.execute(
+            "SELECT sealed_record_hash FROM promotion_objections"
+            " WHERE promotion_id=?", (p["id"],)).fetchall()
+        self.assertEqual([r["sealed_record_hash"] for r in rows], [None, None])
+
+    def test_legacy_seal_return_without_records_skips_backfill(self):
+        # a mocked/legacy seal return with no 'records' key must neither
+        # back-fill nor fail — the receipt just stays at 'filed', disclosed
+        p, minted, receipt = self._filed()
+        h = self._close_sealed(p, records=None)
+        self.assertEqual(h._json()["sealed"], 1)
+        s = self._status(minted["token"], receipt["objection_id"])
+        body = s._json()
+        self.assertEqual(body["status"], "filed")
+        self.assertEqual(body["promotion_state"], "closed")
+
+
 if __name__ == "__main__":
     unittest.main()

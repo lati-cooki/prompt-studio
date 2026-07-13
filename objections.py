@@ -41,6 +41,16 @@ plan sketched this column as "created_at"; the sealed DR contract names it
 minted_at, and promotion_store.metrics queries it by that name — the DR
 wins. minted_at IS the creation timestamp; there is no second one.
 
+REFUSAL AUDIT (Task 13 — the silent-action DR applied to the front door):
+a refused write shaped the output — the objection that isn't there — so it
+leaves a witness. The insert-only local table object_refusals records
+every /object/* refusal (ts, ip, path_kind page|file|status, reason_code,
+token_id when the token was identifiable). The prober still gets the
+byte-identical generic 404/429 — NO oracle change; the OPERATOR reads the
+record via GET /api/object-refusals. The audit is LOCAL, deliberately NOT
+hub-sealed: per-probe hub seals would let a prober spam the permanent
+public record — the hub seals acts, not probes.
+
 Objection resolutions: when a promotion with token objections seals, the
 resolution still rides the Phase 4 inline form ("[resolution: ...]"
 appended to the ObjectionRaised text — the mapping table's disclosed form).
@@ -198,6 +208,65 @@ def ensure_tokens_table(conn):
         created_by TEXT
     )""")
     conn.commit()
+
+
+def ensure_refusals_table(conn):
+    """object_refusals — the front door's insert-only witness log (Task 13).
+    Guarded, idempotent; created at boot (init_db) and lazily on first use.
+    Append-only is ENFORCED, not conventional: BEFORE UPDATE/DELETE
+    triggers abort any rewrite — the hub's discipline, applied locally."""
+    conn.execute("""CREATE TABLE IF NOT EXISTS object_refusals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts TEXT NOT NULL,
+        ip TEXT NOT NULL,
+        path_kind TEXT NOT NULL CHECK (path_kind IN ('page','file','status')),
+        reason_code TEXT NOT NULL CHECK (reason_code IN
+            ('unknown','revoked','exhausted','expired','closed',
+             'rate_limited','malformed')),
+        token_id INTEGER
+    )""")
+    conn.execute("""CREATE TRIGGER IF NOT EXISTS object_refusals_no_update
+        BEFORE UPDATE ON object_refusals
+        BEGIN SELECT RAISE(ABORT, 'object_refusals is append-only'); END""")
+    conn.execute("""CREATE TRIGGER IF NOT EXISTS object_refusals_no_delete
+        BEFORE DELETE ON object_refusals
+        BEGIN SELECT RAISE(ABORT, 'object_refusals is append-only'); END""")
+    conn.commit()
+
+
+def record_refusal(conn, ip, path_kind, reason_code, token_id=None):
+    """Append one refusal witness (local by design — see the module
+    docstring: hub-sealing per probe would let a prober spam the permanent
+    record). Never alters the prober-visible response: callers record and
+    then send the same generic bytes they always sent. token_id is set only
+    when the token was valid enough to identify."""
+    ensure_refusals_table(conn)
+    conn.execute(
+        "INSERT INTO object_refusals (ts, ip, path_kind, reason_code, token_id)"
+        " VALUES (?,?,?,?,?)",
+        (_iso(_now()), ip or "?", path_kind, reason_code, token_id))
+    conn.commit()
+
+
+def refusal_summary(conn, window_days=None):
+    """Operator view: counts by reason + the most recent rows, optionally
+    limited to the last <window_days> days."""
+    ensure_refusals_table(conn)
+    where, params = "", ()
+    if window_days is not None:
+        where = " WHERE ts >= strftime(?, 'now', ?)"
+        params = (_TS, f"-{int(window_days)} days")
+    counts = {r[0]: r[1] for r in conn.execute(
+        "SELECT reason_code, COUNT(*) FROM object_refusals"
+        f"{where} GROUP BY reason_code", params)}
+    recent = [dict(zip(("id", "ts", "ip", "path_kind", "reason_code",
+                        "token_id"), r))
+              for r in conn.execute(
+                  "SELECT id, ts, ip, path_kind, reason_code, token_id"
+                  f" FROM object_refusals{where} ORDER BY id DESC LIMIT 50",
+                  params)]
+    return {"window_days": window_days, "total": sum(counts.values()),
+            "counts": counts, "recent": recent}
 
 
 def _now():
@@ -405,12 +474,17 @@ def _display_name_for(conn, token, label, contact_norm):
     return f"objector-{n + 1}"
 
 
-def file_objection(conn, raw, body, contact, label=None):
+def file_objection(conn, raw, body, contact, label=None, ip=None):
     """POST /api/object/<token> — validate the token, provision the objector
     writer (BEFORE the objection exists, so the seal path can attribute it;
     the 5ab35b3 fail-closed guard is the backstop, not the plan), insert the
     objection (channel='token'), burn a use, and return the immediate
     receipt {objection_id, body_hash, status_url}.
+
+    Refused writes leave a witness (Task 13): a 422 here is recorded in
+    object_refusals as 'malformed' with the token RESOLVED (it validated) —
+    unlike TokenInvalid failures, which the server records on its side of
+    the raise. The 422 response itself is unchanged.
 
     Privacy: the contact string is normalized (trim/lowercase) and lives in
     the local writer NAME only ("objector:<contact>"); the hub sees the
@@ -418,9 +492,11 @@ def file_objection(conn, raw, body, contact, label=None):
     token, promotion = validate_token(conn, raw)
     body = body.strip() if isinstance(body, str) else ""
     if not body:
+        record_refusal(conn, ip, "file", "malformed", token["id"])
         raise promotion_store.PromotionError("objection body required", 422)
     contact_norm = contact.strip().lower() if isinstance(contact, str) else ""
     if not contact_norm:
+        record_refusal(conn, ip, "file", "malformed", token["id"])
         raise promotion_store.PromotionError(
             "contact required (kept local — never sent to the hub)", 422)
     writer_name = f"objector:{contact_norm}"

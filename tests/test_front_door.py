@@ -550,5 +550,203 @@ class TestTimingNormalization(FrontDoorCase):
         self.assertEqual(len(api_bodies), 1)
 
 
+# ---------------------------------------------------------------------------
+# Deliverable 6 — the door witnesses its refusals (object_refusals):
+# insert-only local audit; prober-visible surface unchanged; operator-only
+# summary route.
+
+
+class TestRefusalAudit(FrontDoorCase):
+    def _rows(self):
+        try:
+            return [dict(r) for r in self.anchor.execute(
+                "SELECT * FROM object_refusals ORDER BY id")]
+        except sqlite3.OperationalError:
+            return []
+
+    def test_page_refusals_recorded_per_branch(self):
+        p = self._open_promotion()
+        cases = [("unknown", "not-a-token", None)]
+        for reason, sabotage in (
+            ("revoked", "UPDATE fcp_tokens SET revoked=1 WHERE id=?"),
+            ("exhausted", "UPDATE fcp_tokens SET uses=use_limit WHERE id=?"),
+            ("expired",
+             "UPDATE fcp_tokens SET expires_at='2000-01-01T00:00:00Z' WHERE id=?"),
+        ):
+            minted = self._mint(p["id"])._json()
+            self.anchor.execute(sabotage, (minted["token_id"],))
+            self.anchor.commit()
+            cases.append((reason, minted["token"], minted["token_id"]))
+        closed = self._mint(p["id"])._json()
+        self.anchor.execute("UPDATE promotions SET state='aborted' WHERE id=?",
+                            (p["id"],))
+        self.anchor.commit()
+        cases.append(("closed", closed["token"], closed["token_id"]))
+
+        bodies = set()
+        for reason, raw, _tid in cases:
+            h = self._get_page(raw)
+            self.assertEqual(h._last_status, 404, reason)
+            bodies.add(h._body_written)
+        self.assertEqual(len(bodies), 1)  # response bodies UNCHANGED
+
+        rows = self._rows()
+        self.assertEqual([r["reason_code"] for r in rows],
+                         [c[0] for c in cases])
+        for row, (reason, _raw, tid) in zip(rows, cases):
+            self.assertEqual(row["path_kind"], "page", reason)
+            self.assertEqual(row["token_id"], tid, reason)  # NULL iff unknown
+            self.assertEqual(row["ip"], "203.0.113.5")
+            self.assertTrue(row["ts"])
+
+    def test_malformed_object_path_recorded(self):
+        h = self._h()
+        h.path = "/object/whatever/junk"
+        h.do_GET()
+        self.assertEqual(h._last_status, 404)
+        rows = self._rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["reason_code"], "malformed")
+        self.assertEqual(rows[0]["path_kind"], "page")
+        self.assertIsNone(rows[0]["token_id"])
+
+    def test_file_refusals_recorded(self):
+        p, minted = self._minted()
+        # unknown token on the filing surface
+        self._post_objection("bogus", {"body": "x", "contact": "a@b"})
+        # malformed: valid token, missing body -> 422, token_id RESOLVED
+        h = self._post_objection(minted["token"], {"contact": "a@b"})
+        self.assertEqual(h._last_status, 422)
+        rows = self._rows()
+        self.assertEqual([(r["path_kind"], r["reason_code"]) for r in rows],
+                         [("file", "unknown"), ("file", "malformed")])
+        self.assertIsNone(rows[0]["token_id"])
+        self.assertEqual(rows[1]["token_id"], minted["token_id"])
+
+    def test_invalid_json_recorded_as_malformed(self):
+        h = self._h()
+        h.path = "/api/object/whatever"
+        h._set_body(b"{not json")
+        h.do_POST()
+        self.assertEqual(h._last_status, 400)
+        rows = self._rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["reason_code"], "malformed")
+        self.assertEqual(rows[0]["path_kind"], "file")
+        self.assertIsNone(rows[0]["token_id"])  # token never validated
+
+    def test_status_refusals_recorded(self):
+        p, minted = self._minted()
+        h, _ = self._file(minted["token"])
+        oid = h._json()["objection_id"]
+        s = self._h()
+        s.path = "/object/bogus/status/1"
+        s.do_GET()
+        self.assertEqual(s._last_status, 404)
+        s = self._h()
+        s.path = f"/object/{minted['token']}/status/abc"
+        s.do_GET()
+        self.assertEqual(s._last_status, 404)
+        rows = self._rows()
+        self.assertEqual([(r["path_kind"], r["reason_code"]) for r in rows],
+                         [("status", "unknown"), ("status", "malformed")])
+        self.assertEqual(rows[1]["token_id"], minted["token_id"])
+
+    def test_rate_limited_recorded(self):
+        ip = "198.51.100.20"
+        with patch.object(objections, "RATE_LIMIT", 2):
+            for _ in range(2):
+                self._post_objection("bogus", {"body": "x", "contact": "a@b"},
+                                     ip=ip)
+            h = self._post_objection("bogus", {"body": "x", "contact": "a@b"},
+                                     ip=ip)
+            self.assertEqual(h._last_status, 429)
+            g = self._h(ip)
+            g.path = "/object/bogus"
+            g.do_GET()
+            self.assertEqual(g._last_status, 429)
+        rows = [r for r in self._rows() if r["reason_code"] == "rate_limited"]
+        self.assertEqual([(r["path_kind"], r["ip"]) for r in rows],
+                         [("file", ip), ("page", ip)])
+
+    def test_successful_requests_leave_no_rows(self):
+        p, minted = self._minted()
+        self._get_page(minted["token"])
+        h, _ = self._file(minted["token"])
+        self.assertEqual(h._last_status, 200)
+        oid = h._json()["objection_id"]
+        s = self._h()
+        s.path = f"/object/{minted['token']}/status/{oid}"
+        s.do_GET()
+        self.assertEqual(s._last_status, 200)
+        self.assertEqual(self._rows(), [])
+
+    def test_table_is_insert_only(self):
+        objections.record_refusal(self.anchor, "1.2.3.4", "page", "unknown")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.anchor.execute(
+                "UPDATE object_refusals SET reason_code='revoked'")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.anchor.execute("DELETE FROM object_refusals")
+        # enum discipline: unknown kinds/reasons refused at the schema
+        with self.assertRaises(sqlite3.IntegrityError):
+            objections.record_refusal(self.anchor, "1.2.3.4", "page", "nope")
+
+    def test_audit_is_local_not_hub_sealed(self):
+        # per-probe hub seals would let a prober spam the permanent record;
+        # the rationale must be stated in the module docstring
+        self.assertIn("spam", objections.__doc__)
+        with patch("seal.seal_decision") as mock_seal, \
+             patch("seal._th") as mock_th:
+            self._post_objection("bogus", {"body": "x", "contact": "a@b"})
+        self.assertFalse(mock_seal.called)
+        self.assertFalse(mock_th.called)
+
+
+class TestRefusalSummaryRoute(FrontDoorCase):
+    def _seed(self):
+        self._post_objection("bogus", {"body": "x", "contact": "a@b"})
+        self._get_page("also-bogus")
+
+    def test_summary_counts_and_recent(self):
+        self._seed()
+        h = self._req("GET", "/api/object-refusals")
+        self.assertEqual(h._last_status, 200)
+        body = h._json()
+        self.assertEqual(body["counts"], {"unknown": 2})
+        self.assertEqual(body["total"], 2)
+        self.assertEqual(len(body["recent"]), 2)
+        self.assertEqual(body["recent"][0]["path_kind"], "page")  # newest first
+        self.assertIsNone(body["window_days"])
+
+    def test_summary_window_param(self):
+        self._seed()
+        h = self._req("GET", "/api/object-refusals?window=7")
+        self.assertEqual(h._last_status, 200)
+        self.assertEqual(h._json()["window_days"], 7)
+        self.assertEqual(h._json()["total"], 2)  # rows are recent
+        for bad in ("abc", "0", "-3"):
+            h = self._req("GET", f"/api/object-refusals?window={bad}")
+            self.assertEqual(h._last_status, 422, bad)
+
+    def test_summary_requires_operator_auth_when_on(self):
+        self._seed()
+        with patch.object(objections, "OPERATOR_TOKEN", "sekret"):
+            h = self._req("GET", "/api/object-refusals")
+            self.assertEqual(h._last_status, 401)
+            h = self._req("GET", "/api/object-refusals", bearer="wrong")
+            self.assertEqual(h._last_status, 401)
+            h = self._req("GET", "/api/object-refusals", bearer="sekret")
+            self.assertEqual(h._last_status, 200)
+
+    def test_summary_walled_off_in_public_mode(self):
+        with patch.object(objections, "PUBLIC_MODE", True), \
+             patch.object(objections, "OPERATOR_TOKEN", "sekret"):
+            h = self._req("GET", "/api/object-refusals", bearer="sekret")
+            self.assertEqual(h._last_status, 404)
+            self.assertEqual(h._body_written,
+                             objections.GENERIC_404_HTML.encode("utf-8"))
+
+
 if __name__ == "__main__":
     unittest.main()

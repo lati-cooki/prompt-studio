@@ -277,6 +277,8 @@ def init_db():
         # table fcp_tokens references exists first. Deliberately not IN
         # schema.sql: see objections.ensure_tokens_table.
         objections.ensure_tokens_table(conn)
+        # Task 13: the front door's insert-only refusal witness log.
+        objections.ensure_refusals_table(conn)
         conn.commit()
         _seed_prompts_from_index(conn)
     finally:
@@ -479,6 +481,8 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 self.handle_get_thread_verify(rest[:-len('/verify')])
             else:
                 self.handle_get_thread(rest)
+        elif self.path.split('?', 1)[0] == '/api/object-refusals':
+            self.handle_get_object_refusals()
         elif self.path.startswith('/object/'):
             self.handle_object_get(self.path.removeprefix('/object/'))
         elif self.path in ('/', '/sandbox', '/sandbox/'):
@@ -1136,12 +1140,25 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
     def _client_ip(self):
         return self.client_address[0] if getattr(self, 'client_address', None) else '?'
 
+    def _record_refusal(self, path_kind, reason_code, token_id=None):
+        """Witness a front-door refusal (Task 13, objections.record_refusal)
+        on its own connection — for branches that refused before opening
+        one. Never changes the bytes the prober gets."""
+        conn = self.get_db()
+        try:
+            objections.record_refusal(conn, self._client_ip(), path_kind,
+                                      reason_code, token_id)
+        finally:
+            conn.close()
+
     def handle_object_get(self, rest):
         parts = [urllib.parse.unquote(p) for p in rest.split('?', 1)[0].split('/')]
         is_status = len(parts) == 3 and parts[1] == 'status'
         # Task 13: the limiter covers ALL /object/* surfaces — page and
         # status GETs included, not just the filing API.
         if not objections.allow_request(self._client_ip()):
+            self._record_refusal('status' if is_status else 'page',
+                                 'rate_limited')
             self._send_generic_429(as_json=is_status)
             return
         if len(parts) == 1 and parts[0]:
@@ -1149,6 +1166,7 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         elif is_status:
             self.handle_object_status(parts[0], parts[2])
         else:
+            self._record_refusal('page', 'malformed')
             self._send_generic_404_page()
 
     def handle_object_page(self, raw):
@@ -1159,7 +1177,9 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         try:
             try:
                 token, promotion = objections.validate_token(conn, raw)
-            except objections.TokenInvalid:
+            except objections.TokenInvalid as e:
+                objections.record_refusal(conn, self._client_ip(), 'page',
+                                          e.reason_code, e.token_id)
                 self._send_generic_404_page()
                 return
         finally:
@@ -1176,7 +1196,9 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         try:
             try:
                 self.send_json(objections.objection_status(conn, raw, oid))
-            except objections.TokenInvalid:
+            except objections.TokenInvalid as e:
+                objections.record_refusal(conn, self._client_ip(), 'status',
+                                          e.reason_code, e.token_id)
                 self.send_json(objections.GENERIC_404_JSON, status=404)
         finally:
             conn.close()
@@ -1187,10 +1209,14 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         one budget with the page/status GETs (Task 13)."""
         ip = self._client_ip()
         if not objections.allow_request(ip):
+            self._record_refusal('file', 'rate_limited')
             self._send_generic_429(as_json=True)
             return
         data = self.read_json_body()
         if data is None:
+            # 400/413 already sent; the token was never validated, so the
+            # witness carries no token_id
+            self._record_refusal('file', 'malformed')
             return
         conn = self.get_db()
         try:
@@ -1198,8 +1224,10 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 receipt = objections.file_objection(
                     conn, urllib.parse.unquote(token.split('?', 1)[0]),
                     data.get("body"), data.get("contact"),
-                    label=data.get("label"))
-            except objections.TokenInvalid:
+                    label=data.get("label"), ip=ip)
+            except objections.TokenInvalid as e:
+                objections.record_refusal(conn, ip, 'file',
+                                          e.reason_code, e.token_id)
                 self.send_json(objections.GENERIC_404_JSON, status=404)
                 return
             except promotion_store.PromotionError as e:
@@ -1216,6 +1244,38 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         finally:
             conn.close()
         self.send_json(receipt)
+
+    def handle_get_object_refusals(self):
+        """GET /api/object-refusals?window=<days> — the operator's view of
+        the front-door refusal audit (Task 13): counts by reason + recent
+        rows. Operator-auth'd: reads are otherwise open in the localhost
+        posture, but this log carries prober IPs, so it rides the bearer
+        check whenever STUDIO_OPERATOR_TOKEN is set. In public mode the
+        route does not exist at all (generic 404 from _front_door)."""
+        if not self.operator_authorized():
+            self._send_unauthorized()
+            return
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        raw = query.get("window", [None])[0]
+        window_days = None
+        if raw is not None:
+            try:
+                window_days = int(raw)
+            except ValueError:
+                self.send_json(
+                    {"error": "window must be a whole number of days"},
+                    status=422)
+                return
+            if window_days <= 0:
+                self.send_json(
+                    {"error": "window must be a positive number of days"},
+                    status=422)
+                return
+        conn = self.get_db()
+        try:
+            self.send_json(objections.refusal_summary(conn, window_days))
+        finally:
+            conn.close()
 
     def handle_token_mint(self, pid):
         """POST /api/promotions/<pid>/tokens {invitee_label?, use_limit?} —

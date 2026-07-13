@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import http.server
 import mimetypes
 import re
@@ -9,14 +11,6 @@ import sqlite3
 import urllib.request
 import urllib.error
 import urllib.parse
-import anchors
-import challenge
-import objections
-import seal
-import promotion_store
-import promotion_evidence
-import promotion_seal
-import writers
 
 def _load_dotenv(path=".env"):
     """Load key=value pairs from .env into os.environ (no-op if file absent)."""
@@ -31,7 +25,19 @@ def _load_dotenv(path=".env"):
     except FileNotFoundError:
         pass
 
+# BEFORE the local imports: objections.py reads the front-door env
+# (STUDIO_PUBLIC_MODE, STUDIO_OPERATOR_TOKEN, ...) at module top, so .env
+# must already be in os.environ when it is imported.
 _load_dotenv()
+
+import anchors
+import challenge
+import objections
+import seal
+import promotion_store
+import promotion_evidence
+import promotion_seal
+import writers
 
 try:
     import anthropic
@@ -271,6 +277,8 @@ def init_db():
         # table fcp_tokens references exists first. Deliberately not IN
         # schema.sql: see objections.ensure_tokens_table.
         objections.ensure_tokens_table(conn)
+        # Task 13: the front door's insert-only refusal witness log.
+        objections.ensure_refusals_table(conn)
         conn.commit()
         _seed_prompts_from_index(conn)
     finally:
@@ -298,7 +306,96 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         super().end_headers()
 
+    # ── Task 13: the front door ────────────────────────────────────────────
+    # ONE dispatch-path gate: every verb handler (do_GET/do_POST/do_PUT/
+    # do_DELETE/do_OPTIONS) enters through _front_door before any routing.
+    # (do_HEAD is not gated: it already answers a uniform 404 for EVERY path
+    # in every mode — no differential, no oracle.)
+
+    @staticmethod
+    def _skeptic_surface(method, path):
+        """The ONLY surface a public deployment serves: the skeptic's
+        objection page, filing endpoint and receipt/status route.
+
+        Static assets: NONE, deliberately — objections.render_object_page is
+        fully self-contained (inline CSS + inline JS, no /js/ imports), so
+        the skeptic surface needs zero static files. Serving none keeps the
+        public surface minimal and leaves no file-existence oracle."""
+        if method == 'GET':
+            return path.startswith('/object/')
+        if method == 'POST':
+            return path.startswith('/api/object/')
+        return False
+
+    def operator_authorized(self):
+        """True when no STUDIO_OPERATOR_TOKEN is configured (localhost
+        posture — current behavior), or when the request carries
+        `Authorization: Bearer <token>` matching it. Comparison is
+        constant-time over sha256 digests (hmac.compare_digest; hashing
+        first makes the comparison length-independent too)."""
+        expected = objections.OPERATOR_TOKEN
+        if not expected:
+            return True
+        header = self.headers.get('Authorization') or ''
+        supplied = header[len('Bearer '):] if header.startswith('Bearer ') else ''
+        return hmac.compare_digest(
+            hashlib.sha256(supplied.encode('utf-8')).digest(),
+            hashlib.sha256(expected.encode('utf-8')).digest())
+
+    def _send_unauthorized(self):
+        body = b"unauthorized\n"
+        self.send_response(401)
+        self.send_header('Content-Type', 'text/plain; charset=utf-8')
+        self.send_header('WWW-Authenticate', 'Bearer')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _front_door(self, method, route):
+        """The one public-mode + operator-auth gate on the dispatch path
+        (Task 13).
+
+        STUDIO_PUBLIC_MODE=1: every non-skeptic route — operator API, studio
+        UI, static assets, unknown paths alike — answers the byte-identical
+        generic 404 the token paths use. An outsider probing the front door
+        cannot distinguish a walled-off route from a nonexistent one or from
+        an invalid token (no route-existence oracle). The code being public
+        means the route LIST is not a secret; reachability is the wall.
+
+        Order matters: the public-mode wall runs FIRST, so on a public
+        deployment an operator route 404s generically rather than 401ing —
+        a 401 would be a route-existence oracle.
+
+        Auth: when STUDIO_OPERATOR_TOKEN is set, every state-changing verb
+        (POST/PUT/DELETE) outside the skeptic write surface (/api/object/*)
+        requires the bearer token."""
+        path = self.path.split('?', 1)[0]
+        if objections.PUBLIC_MODE and not self._skeptic_surface(method, path):
+            self._send_generic_404_page()
+            return
+        if (method in ('POST', 'PUT', 'DELETE')
+                and not path.startswith('/api/object/')
+                and not self.operator_authorized()):
+            self._send_unauthorized()
+            return
+        route()
+
+    def do_GET(self):
+        self._front_door('GET', self._route_GET)
+
+    def do_POST(self):
+        self._front_door('POST', self._route_POST)
+
+    def do_PUT(self):
+        self._front_door('PUT', self._route_PUT)
+
+    def do_DELETE(self):
+        self._front_door('DELETE', self._route_DELETE)
+
     def do_OPTIONS(self):
+        self._front_door('OPTIONS', self._route_OPTIONS)
+
+    def _route_OPTIONS(self):
         self.send_response(200, "ok")
         self.end_headers()
 
@@ -355,7 +452,7 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             return
         self.proxy_threadhub_get(f"/t/{slug}/verify")
 
-    def do_GET(self):
+    def _route_GET(self):
         if self.path == '/api/sessions':
             self.handle_get_sessions()
         elif self.path == '/api/prompts':
@@ -384,6 +481,8 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 self.handle_get_thread_verify(rest[:-len('/verify')])
             else:
                 self.handle_get_thread(rest)
+        elif self.path.split('?', 1)[0] == '/api/object-refusals':
+            self.handle_get_object_refusals()
         elif self.path.startswith('/object/'):
             self.handle_object_get(self.path.removeprefix('/object/'))
         elif self.path in ('/', '/sandbox', '/sandbox/'):
@@ -458,7 +557,7 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         except (FileNotFoundError, IsADirectoryError, PermissionError):
             self.send_error(404, f"File not found: {path}")
 
-    def do_POST(self):
+    def _route_POST(self):
         if self.path == '/api/sessions':
             self.handle_post_sessions()
         elif self.path.startswith('/api/prompts/'):
@@ -504,7 +603,7 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         else:
             self.send_error(404)
 
-    def do_PUT(self):
+    def _route_PUT(self):
         if self.path.startswith('/api/sessions/'):
             session_id = self.path.split('/')[-1]
             self.handle_put_session(session_id)
@@ -514,7 +613,7 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         else:
             self.send_error(404)
 
-    def do_DELETE(self):
+    def _route_DELETE(self):
         if self.path.startswith('/api/sessions/'):
             session_id = self.path.split('/')[-1]
             self.handle_delete_session(session_id)
@@ -1025,13 +1124,58 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _send_generic_429(self, as_json):
+        """One generic 429 per surface — the limiter fires BEFORE token
+        validation, identically for any token, so it adds no oracle."""
+        if as_json:
+            self.send_json(objections.GENERIC_429_JSON, status=429)
+            return
+        body = objections.GENERIC_429_HTML.encode('utf-8')
+        self.send_response(429)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _client_ip(self):
+        return self.client_address[0] if getattr(self, 'client_address', None) else '?'
+
+    def _record_refusal(self, path_kind, reason_code, token_id=None):
+        """Witness a front-door refusal (Task 13, objections.record_refusal)
+        on its own connection — for branches that refused before opening
+        one. NEVER raises and never changes the bytes the prober gets:
+        record_refusal already swallows-and-logs its own failures; this
+        guard additionally covers get_db()/close(), so even a connection
+        failure cannot break the generic response."""
+        try:
+            conn = self.get_db()
+            try:
+                objections.record_refusal(conn, self._client_ip(), path_kind,
+                                          reason_code, token_id)
+            finally:
+                conn.close()
+        except Exception:
+            logging.error(
+                "refusal witness FAILED before recording (path_kind=%s "
+                "reason=%s); prober response unaffected",
+                path_kind, reason_code, exc_info=True)
+
     def handle_object_get(self, rest):
         parts = [urllib.parse.unquote(p) for p in rest.split('?', 1)[0].split('/')]
+        is_status = len(parts) == 3 and parts[1] == 'status'
+        # Task 13: the limiter covers ALL /object/* surfaces — page and
+        # status GETs included, not just the filing API.
+        if not objections.allow_request(self._client_ip()):
+            self._record_refusal('status' if is_status else 'page',
+                                 'rate_limited')
+            self._send_generic_429(as_json=is_status)
+            return
         if len(parts) == 1 and parts[0]:
             self.handle_object_page(parts[0])
-        elif len(parts) == 3 and parts[1] == 'status':
+        elif is_status:
             self.handle_object_status(parts[0], parts[2])
         else:
+            self._record_refusal('page', 'malformed')
             self._send_generic_404_page()
 
     def handle_object_page(self, raw):
@@ -1042,7 +1186,9 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         try:
             try:
                 token, promotion = objections.validate_token(conn, raw)
-            except objections.TokenInvalid:
+            except objections.TokenInvalid as e:
+                objections.record_refusal(conn, self._client_ip(), 'page',
+                                          e.reason_code, e.token_id)
                 self._send_generic_404_page()
                 return
         finally:
@@ -1059,22 +1205,27 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         try:
             try:
                 self.send_json(objections.objection_status(conn, raw, oid))
-            except objections.TokenInvalid:
+            except objections.TokenInvalid as e:
+                objections.record_refusal(conn, self._client_ip(), 'status',
+                                          e.reason_code, e.token_id)
                 self.send_json(objections.GENERIC_404_JSON, status=404)
         finally:
             conn.close()
 
     def handle_object_post(self, token):
         """POST /api/object/<token> {body, contact, label?} — file the
-        objection. Rate-limited per IP (objections.allow_request) — the
-        ONLY rate-limited surface, per the plan: /api/object/* only."""
-        ip = self.client_address[0] if getattr(self, 'client_address', None) else '?'
+        objection. Rate-limited per IP (objections.allow_request), sharing
+        one budget with the page/status GETs (Task 13)."""
+        ip = self._client_ip()
         if not objections.allow_request(ip):
-            self.send_json({"error": "rate limited — try again shortly"},
-                           status=429)
+            self._record_refusal('file', 'rate_limited')
+            self._send_generic_429(as_json=True)
             return
         data = self.read_json_body()
         if data is None:
+            # 400/413 already sent; the token was never validated, so the
+            # witness carries no token_id
+            self._record_refusal('file', 'malformed')
             return
         conn = self.get_db()
         try:
@@ -1082,8 +1233,10 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 receipt = objections.file_objection(
                     conn, urllib.parse.unquote(token.split('?', 1)[0]),
                     data.get("body"), data.get("contact"),
-                    label=data.get("label"))
-            except objections.TokenInvalid:
+                    label=data.get("label"), ip=ip)
+            except objections.TokenInvalid as e:
+                objections.record_refusal(conn, ip, 'file',
+                                          e.reason_code, e.token_id)
                 self.send_json(objections.GENERIC_404_JSON, status=404)
                 return
             except promotion_store.PromotionError as e:
@@ -1101,13 +1254,47 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             conn.close()
         self.send_json(receipt)
 
+    def handle_get_object_refusals(self):
+        """GET /api/object-refusals?window=<days> — the operator's view of
+        the front-door refusal audit (Task 13): counts by reason + recent
+        rows. Operator-auth'd: reads are otherwise open in the localhost
+        posture, but this log carries prober IPs, so it rides the bearer
+        check whenever STUDIO_OPERATOR_TOKEN is set. In public mode the
+        route does not exist at all (generic 404 from _front_door)."""
+        if not self.operator_authorized():
+            self._send_unauthorized()
+            return
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        raw = query.get("window", [None])[0]
+        window_days = None
+        if raw is not None:
+            try:
+                window_days = int(raw)
+            except ValueError:
+                self.send_json(
+                    {"error": "window must be a whole number of days"},
+                    status=422)
+                return
+            if window_days <= 0:
+                self.send_json(
+                    {"error": "window must be a positive number of days"},
+                    status=422)
+                return
+        conn = self.get_db()
+        try:
+            self.send_json(objections.refusal_summary(conn, window_days))
+        finally:
+            conn.close()
+
     def handle_token_mint(self, pid):
         """POST /api/promotions/<pid>/tokens {invitee_label?, use_limit?} —
         mint an objection token (Slice 6). The raw token appears ONCE, in
         this response; only its hash is stored. Refuses 409 when the
         operator writer is unprovisioned (see objections.mint_token).
-        "Operator-only" is deployment posture (localhost), not enforced
-        auth — objections.POSTURE_NOTE rides on the response."""
+        "Operator-only" is enforced bearer auth when STUDIO_OPERATOR_TOKEN
+        is set (_front_door), deployment posture (localhost) otherwise —
+        objections.posture_note() derives the honest disclosure from live
+        config and rides on the response."""
         data = self.read_json_body()
         if data is None:
             return
@@ -1123,8 +1310,11 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 return
         finally:
             conn.close()
-        host = self.headers.get('Host') or f"localhost:{PORT}"
-        minted["url"] = f"http://{host}{minted.pop('url_path')}"
+        # Share URL from CONFIG, never the Host header (a client-controlled
+        # Host must not steer where an invitation points): STUDIO_PUBLIC_BASE_URL
+        # when configured, the local bind otherwise.
+        base = objections.PUBLIC_BASE_URL or f"http://localhost:{PORT}"
+        minted["url"] = f"{base}{minted.pop('url_path')}"
         self.send_json(minted)
 
     def handle_token_revoke(self, pid, token_id):
@@ -1492,8 +1682,14 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             conn.close()
         self.send_raw_json(result if result else "[]")
 
+class StudioTCPServer(socketserver.TCPServer):
+    """TIME_WAIT hygiene (Task 13): allow_reuse_address so a restart can
+    rebind the port immediately instead of failing on lingering sockets."""
+    allow_reuse_address = True
+
+
 if __name__ == '__main__':
     init_db()
-    with socketserver.TCPServer(("", PORT), PromptStudioHandler) as httpd:
+    with StudioTCPServer(("", PORT), PromptStudioHandler) as httpd:
         print(f"Serving at port {PORT}")
         httpd.serve_forever()

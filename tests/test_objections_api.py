@@ -11,7 +11,8 @@ DR-2026-07-12-fcp-metrics query contract:
   the same byte-identical generic 404 (no leaking which check failed).
 - objection filing: objector writer minted via ensure_writer BEFORE the
   objection exists; contact string never in any hub-bound payload; per-IP
-  rate limit on /api/object/* only.
+  rate limit shared across ALL /object/* and /api/object/* surfaces
+  (Task 13 — tests/test_front_door.py covers the limiter in depth).
 - two-phase receipts: immediate {objection_id, body_hash, status_url};
   post-seal full receipt with record_hash/thread_slug/citation_hash/
   record_url/verify_url/checker_url + DR 5.6 custody disclosure +
@@ -514,13 +515,15 @@ class TestRateLimit(TokenPathTestCase):
                                  ip="198.51.100.8")
         self.assertEqual(h._last_status, 404)
 
-    def test_rate_limit_scoped_to_api_object_only(self):
+    def test_rate_limit_covers_all_object_surfaces_but_not_mint(self):
+        # Task 13 hardening: ALL /object/* and /api/object/* surfaces share
+        # the per-IP limiter — a prober hammering the page render hits it
+        # too. The operator mint route is NOT under /object/*.
         p, minted = self._minted()
         for _ in range(11):
             self._post_objection("bogus", {"body": "x", "contact": "a@b"})
-        # the standalone page and the mint route are NOT under /api/object/*
         h = self._get_page(minted["token"])
-        self.assertEqual(h._last_status, 200)
+        self.assertEqual(h._last_status, 429)
         h2 = self._mint(p["id"])
         self.assertEqual(h2._last_status, 200)
 

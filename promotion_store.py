@@ -47,6 +47,9 @@ def get_promotion(conn, pid):
         raise PromotionError("promotion not found", 404)
     p = dict(row)
     p["evidence"] = json.loads(p.pop("evidence_json")) if p.get("evidence_json") else None
+    # NOTE: objections.validate_token's timing-normalization path mirrors this
+    # exact query (statement-count equality, pinned by test_no_unknown_token_fast_path)
+    # — if you change this query's shape, update the mirror there too.
     p["objections"] = [dict(o) for o in conn.execute(
         "SELECT * FROM promotion_objections WHERE promotion_id=? ORDER BY id", (pid,))]
     p["window_elapsed"] = _now() >= _parse(p["closes_at"])

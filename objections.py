@@ -5,12 +5,15 @@ an account, and walks away with a receipt whose instructions let them verify
 their own objection against the hub with a checker they can run anywhere
 (GET <hub>/verify.mjs).
 
-HONEST POSTURE NOTE (owner decision, locked): the token mint/revoke routes
-are "operator-only" as DEPLOYMENT POSTURE — this server binds localhost and
-only the operator can reach it. That is NOT enforced auth: there is no
-credential check on these routes. Anyone who can reach the server can mint.
-Public hosting is a named pre-Sept-7 follow-up; do not expose this server
-until that lands.
+HONEST POSTURE NOTE (owner decision, locked; hardened in Task 13): whether
+the token mint/revoke routes are "operator-only" by DEPLOYMENT POSTURE
+(localhost binding, no credential check) or by ENFORCED bearer auth depends
+on live config — STUDIO_OPERATOR_TOKEN set means every state-changing
+operator route requires `Authorization: Bearer <token>`; unset means anyone
+who can reach the server can mint. posture_note() derives the disclosure
+from the actual config so it is never false. A public deployment must ALSO
+set STUDIO_PUBLIC_MODE=1, which walls off everything but the skeptic
+surface (/object/*).
 
 Token rules:
 - raw token: >= 32 bytes urlsafe from `secrets`, shown exactly ONCE in the
@@ -38,6 +41,16 @@ plan sketched this column as "created_at"; the sealed DR contract names it
 minted_at, and promotion_store.metrics queries it by that name — the DR
 wins. minted_at IS the creation timestamp; there is no second one.
 
+REFUSAL AUDIT (Task 13 — the silent-action DR applied to the front door):
+a refused write shaped the output — the objection that isn't there — so it
+leaves a witness. The insert-only local table object_refusals records
+every /object/* refusal (ts, ip, path_kind page|file|status, reason_code,
+token_id when the token was identifiable). The prober still gets the
+byte-identical generic 404/429 — NO oracle change; the OPERATOR reads the
+record via GET /api/object-refusals. The audit is LOCAL, deliberately NOT
+hub-sealed: per-probe hub seals would let a prober spam the permanent
+public record — the hub seals acts, not probes.
+
 Objection resolutions: when a promotion with token objections seals, the
 resolution still rides the Phase 4 inline form ("[resolution: ...]"
 appended to the ObjectionRaised text — the mapping table's disclosed form).
@@ -46,8 +59,11 @@ to support `objection resolve`, which it does not yet; that is a filed
 follow-up, not this slice. Do NOT hand-roll validator-bypassing events.
 """
 import hashlib
+import hmac
 import html
 import json
+import logging
+import os
 import secrets
 import time
 from datetime import datetime, timezone
@@ -59,6 +75,44 @@ import writers
 _TS = "%Y-%m-%dT%H:%M:%SZ"
 
 # ---------------------------------------------------------------------------
+# front-door config (Task 13 hosting hardening) — the ONE place the hosting
+# env is read. server.py consumes these module attributes at request time
+# (which also keeps them patchable in tests). server.py loads .env BEFORE
+# importing this module, so os.environ is complete here.
+
+
+def _parse_rate(spec):
+    """'10' -> (10, 60.0); '20/30' -> (20, 30.0): N requests per W seconds.
+    A malformed spec fails LOUD at boot — misconfiguration must not launch
+    a front door with a limiter it didn't ask for — with an error naming
+    the env var and the expected format."""
+    try:
+        count, _, window = (spec or "").partition("/")
+        return max(1, int(count)), (float(window) if window else 60.0)
+    except ValueError:
+        raise ValueError(
+            f"STUDIO_OBJECT_RATE={spec!r} is malformed — expected 'N' or "
+            "'N/seconds' (e.g. '10/60' for 10 requests per 60 seconds)"
+        ) from None
+
+
+# STUDIO_PUBLIC_MODE=1 -> serve ONLY the skeptic surface (server._front_door).
+PUBLIC_MODE = os.environ.get("STUDIO_PUBLIC_MODE", "") == "1"
+# When set, every state-changing operator route requires
+# `Authorization: Bearer <token>` (constant-time check in server.py).
+OPERATOR_TOKEN = os.environ.get("STUDIO_OPERATOR_TOKEN") or None
+# Externally reachable base for share/receipt URLs (e.g.
+# https://objections.example.com). The Host header is NEVER used.
+PUBLIC_BASE_URL = (os.environ.get("STUDIO_PUBLIC_BASE_URL") or "").rstrip("/") or None
+# Externally reachable ThreadHub base for receipt URLs; falls back to the
+# local hub. A receipt must never hand an external skeptic a localhost URL
+# when a public base is configured.
+THREADHUB_PUBLIC_BASE_URL = (
+    os.environ.get("THREADHUB_PUBLIC_BASE_URL") or "").rstrip("/") or None
+# Rate limit for ALL /object/* and /api/object/* surfaces, per IP.
+RATE_LIMIT, RATE_WINDOW = _parse_rate(os.environ.get("STUDIO_OBJECT_RATE", "10/60"))
+
+# ---------------------------------------------------------------------------
 # generic 404 — one body per surface, byte-identical for every failure mode
 
 GENERIC_404_JSON = {"error": "not found"}
@@ -66,17 +120,50 @@ GENERIC_404_HTML = (
     "<!doctype html><meta charset='utf-8'><title>Not found</title>"
     "<p>Not found.</p>")
 
+# generic 429 — same discipline: one body per surface, no detail beyond
+# "rate limited" (the limiter must not become the oracle the 404s refuse
+# to be — it fires before token validation, identically for any token)
+GENERIC_429_JSON = {"error": "rate limited — try again shortly"}
+GENERIC_429_HTML = (
+    "<!doctype html><meta charset='utf-8'><title>Too many requests</title>"
+    "<p>Too many requests — try again shortly.</p>")
+
 # ---------------------------------------------------------------------------
 # DR 5.6 custody disclosure — travels ON the receipt (and the mint response,
 # so the operator can forward it with the link), visible without querying
 # the hub. Mint-time text is prospective (no objector identity exists yet);
 # receipt-time text names the actual custodial identity.
 
-POSTURE_NOTE = (
-    '"operator-only" is deployment posture (this server is expected to bind '
-    "localhost), not enforced auth — there is no credential check on this "
-    "route. Do not expose this server publicly; public hosting is a named "
-    "pre-Sept-7 follow-up.")
+def posture_note():
+    """Honest, config-derived posture disclosure (Task 13). This string is
+    quoted in mint responses (and forwarded with invitations), so it must
+    describe the mode the server is ACTUALLY in — a 'no credential check'
+    sentence while a bearer check is active would be a false disclosure.
+    Derived from live config at call time; changed text applies to NEW
+    mints/receipts only (stored/sealed records keep the text they quoted)."""
+    if OPERATOR_TOKEN:
+        auth = (
+            "Operator routes on this server enforce bearer auth: "
+            "STUDIO_OPERATOR_TOKEN is set, and every state-changing operator "
+            "route requires 'Authorization: Bearer <token>' (constant-time "
+            "comparison; 401 otherwise).")
+    else:
+        auth = (
+            '"operator-only" is deployment posture (this server is expected '
+            "to bind localhost), not enforced auth — there is no credential "
+            "check on operator routes (STUDIO_OPERATOR_TOKEN is unset). Do "
+            "not expose this server publicly in this mode.")
+    if PUBLIC_MODE:
+        mode = (
+            " STUDIO_PUBLIC_MODE is on: this front door serves only the "
+            "tokenized objection surface (/object/* pages and receipts, "
+            "/api/object/* filing); every other route answers a generic "
+            "404.")
+    else:
+        mode = (
+            " STUDIO_PUBLIC_MODE is off: all studio routes are served "
+            "(local development posture).")
+    return auth + mode
 
 CUSTODY_DISCLOSURE_MINT = (
     "Custody disclosure (DR-phase5-topology 5.6): objections filed through "
@@ -106,10 +193,9 @@ def _custody_disclosure_for(writer):
 
 
 # ---------------------------------------------------------------------------
-# per-IP rate limit state (Slice 6 files it on /api/object/* only) —
-# in-memory by design: resets on restart, which is fine for the localhost
-# deployment posture. See allow_request below.
+# per-IP rate limit state — see allow_request below.
 _rate_buckets = {}
+_last_sweep = 0.0
 
 # ---------------------------------------------------------------------------
 # storage
@@ -133,6 +219,76 @@ def ensure_tokens_table(conn):
         created_by TEXT
     )""")
     conn.commit()
+
+
+def ensure_refusals_table(conn):
+    """object_refusals — the front door's insert-only witness log (Task 13).
+    Guarded, idempotent; created at boot (init_db) and lazily on first use.
+    Append-only is ENFORCED, not conventional: BEFORE UPDATE/DELETE
+    triggers abort any rewrite — the hub's discipline, applied locally."""
+    conn.execute("""CREATE TABLE IF NOT EXISTS object_refusals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts TEXT NOT NULL,
+        ip TEXT NOT NULL,
+        path_kind TEXT NOT NULL CHECK (path_kind IN ('page','file','status')),
+        reason_code TEXT NOT NULL CHECK (reason_code IN
+            ('unknown','revoked','exhausted','expired','closed',
+             'rate_limited','malformed')),
+        token_id INTEGER
+    )""")
+    conn.execute("""CREATE TRIGGER IF NOT EXISTS object_refusals_no_update
+        BEFORE UPDATE ON object_refusals
+        BEGIN SELECT RAISE(ABORT, 'object_refusals is append-only'); END""")
+    conn.execute("""CREATE TRIGGER IF NOT EXISTS object_refusals_no_delete
+        BEFORE DELETE ON object_refusals
+        BEGIN SELECT RAISE(ABORT, 'object_refusals is append-only'); END""")
+    conn.commit()
+
+
+def record_refusal(conn, ip, path_kind, reason_code, token_id=None):
+    """Append one refusal witness (local by design — see the module
+    docstring: hub-sealing per probe would let a prober spam the permanent
+    record). token_id is set only when the token was valid enough to
+    identify.
+
+    NEVER raises: the prober's byte-identical generic response outranks
+    the witness. An audit-write failure (disk full, locked DB, enum drift)
+    must not turn a 404/429 into a dropped connection — that would make
+    audit health itself an observable oracle. The failure is witnessed the
+    only way left: logging.error, loud in the server log."""
+    try:
+        ensure_refusals_table(conn)
+        conn.execute(
+            "INSERT INTO object_refusals"
+            " (ts, ip, path_kind, reason_code, token_id) VALUES (?,?,?,?,?)",
+            (_iso(_now()), ip or "?", path_kind, reason_code, token_id))
+        conn.commit()
+    except Exception:
+        logging.error(
+            "object_refusals witness FAILED (path_kind=%s reason=%s) — "
+            "refusal not recorded; prober response unaffected",
+            path_kind, reason_code, exc_info=True)
+
+
+def refusal_summary(conn, window_days=None):
+    """Operator view: counts by reason + the most recent rows, optionally
+    limited to the last <window_days> days."""
+    ensure_refusals_table(conn)
+    where, params = "", ()
+    if window_days is not None:
+        where = " WHERE ts >= strftime(?, 'now', ?)"
+        params = (_TS, f"-{int(window_days)} days")
+    counts = {r[0]: r[1] for r in conn.execute(
+        "SELECT reason_code, COUNT(*) FROM object_refusals"
+        f"{where} GROUP BY reason_code", params)}
+    recent = [dict(zip(("id", "ts", "ip", "path_kind", "reason_code",
+                        "token_id"), r))
+              for r in conn.execute(
+                  "SELECT id, ts, ip, path_kind, reason_code, token_id"
+                  f" FROM object_refusals{where} ORDER BY id DESC LIMIT 50",
+                  params)]
+    return {"window_days": window_days, "total": sum(counts.values()),
+            "counts": counts, "recent": recent}
 
 
 def _now():
@@ -201,7 +357,7 @@ def mint_token(conn, pid, invitee_label=None, use_limit=1,
         "use_limit": use_limit,
         "invitee_label": invitee_label,
         "custody": CUSTODY_DISCLOSURE_MINT,
-        "posture": POSTURE_NOTE,
+        "posture": posture_note(),
     }
 
 
@@ -224,48 +380,105 @@ class TokenInvalid(Exception):
     """Raised for EVERY token-check failure on /object/* paths. Routes map
     this to one byte-identical generic 404 — deliberately no detail: an
     outsider probing tokens must not learn whether one exists, is revoked,
-    is exhausted, is expired, or belongs to a closed promotion."""
+    is exhausted, is expired, or belongs to a closed promotion.
+
+    Carries reason_code and token_id for the LOCAL refusal audit only
+    (object_refusals) — the prober-visible response never varies with them.
+    token_id is resolved only when the token was valid enough to identify
+    (its hash matched a stored row)."""
+
+    def __init__(self, reason_code="unknown", token_id=None):
+        super().__init__(reason_code)
+        self.reason_code = reason_code
+        self.token_id = token_id
+
+
+# A row shaped like fcp_tokens for the unknown-token path: validation runs
+# the SAME work over it (hash comparison, flag checks, promotion lookup)
+# instead of returning early. Its hash can never equal a real sha256 hex
+# digest and promotion_id -1 can never exist.
+_DUMMY_TOKEN = {
+    "id": None, "token_hash": "!" * 64, "invitee_label": None,
+    "revoked": 0, "uses": 0, "use_limit": 1,
+    "expires_at": "9999-12-31T23:59:59Z", "promotion_id": -1,
+}
 
 
 def validate_token(conn, raw):
     """Full validation for the page and filing paths. Returns
-    (token_row_dict, promotion_dict) or raises TokenInvalid."""
+    (token_row_dict, promotion_dict) or raises TokenInvalid.
+
+    TIMING NOTE (Task 13): perfect timing invariance is not achievable in
+    Python (allocation, dict handling, sqlite plan variance all leak a
+    little — e.g. get_promotion's dict/json/datetime work when a promotion
+    exists), but the gross channel is eliminated: EVERY failure mode
+    computes the token hash, runs the SAME NUMBER of DB statements (token
+    lookup + get_promotion's promotion and objections queries; the
+    unknown-token dummy path runs a compensating objections query so it is
+    not one statement lighter), and compares hashes with
+    hmac.compare_digest. No unknown-token fast path vs known-token slow
+    path."""
     ensure_tokens_table(conn)
+    supplied = hash_token(raw or "")
     row = conn.execute("SELECT * FROM fcp_tokens WHERE token_hash=?",
-                       (hash_token(raw or ""),)).fetchone()
-    if row is None:
-        raise TokenInvalid()
-    token = dict(row)
-    if token["revoked"]:
-        raise TokenInvalid()
-    if token["uses"] >= token["use_limit"]:
-        raise TokenInvalid()
-    if _iso(_now()) >= token["expires_at"]:  # window-close snapshot
-        raise TokenInvalid()
+                       (supplied,)).fetchone()
+    token = dict(row) if row is not None else dict(_DUMMY_TOKEN)
+    # fetch everything first, evaluate at the end
+    hash_ok = hmac.compare_digest(token["token_hash"], supplied)
+    revoked = bool(token["revoked"])
+    exhausted = token["uses"] >= token["use_limit"]
+    expired = _iso(_now()) >= token["expires_at"]  # window-close snapshot
     try:
         promotion = promotion_store.get_promotion(conn, token["promotion_id"])
     except promotion_store.PromotionError:
-        raise TokenInvalid()
-    if promotion["state"] != promotion_store.OPEN:
-        raise TokenInvalid()
+        # uniform DB work: a found promotion costs get_promotion a second
+        # query (its objections list); run the same-shaped statement here so
+        # the missing-promotion path (the unknown-token dummy) issues the
+        # same number of statements. Mirrors get_promotion's objections
+        # query deliberately.
+        conn.execute(
+            "SELECT * FROM promotion_objections WHERE promotion_id=?"
+            " ORDER BY id", (token["promotion_id"],)).fetchall()
+        promotion = None
+    not_open = promotion is None or promotion["state"] != promotion_store.OPEN
+    if not hash_ok:
+        raise TokenInvalid("unknown")
+    if revoked:
+        raise TokenInvalid("revoked", token["id"])
+    if exhausted:
+        raise TokenInvalid("exhausted", token["id"])
+    if expired:
+        raise TokenInvalid("expired", token["id"])
+    if not_open:
+        raise TokenInvalid("closed", token["id"])
     return token, promotion
 
 
 # ---------------------------------------------------------------------------
-# per-IP rate limit — /api/object/* only
-
-RATE_LIMIT = 10          # requests
-RATE_WINDOW = 60.0       # per this many seconds, per IP
+# per-IP rate limit — ALL /object/* and /api/object/* surfaces (Task 13):
+# page GETs and status GETs included; a prober hammering the page render
+# hits the same limiter as the filing API. RATE_LIMIT/RATE_WINDOW are
+# env-tunable via STUDIO_OBJECT_RATE (module-top config block).
 
 
 def allow_request(ip, now=None):
-    """Sliding-window in-memory counter (RATE_LIMIT per RATE_WINDOW per IP),
-    applied by the server to /api/object/* ONLY. In-memory means it resets
-    on restart — acceptable for the localhost deployment posture; a public
-    deployment needs a real limiter (part of the pre-Sept-7 follow-up)."""
+    """Sliding-window in-memory counter (RATE_LIMIT per RATE_WINDOW per IP).
+
+    In-memory, DOCUMENTED trade-off: state is per-process and resets on
+    restart — fine for a single-process deployment; a fronting proxy may
+    add its own layer. Buckets whose entries have all aged out are EVICTED
+    once per window (a full sweep, amortized), so a probe spread across
+    many distinct IPs cannot grow the map unboundedly. The backwards-clock
+    branch only matters for tests that pass explicit `now` values."""
+    global _last_sweep
     now = time.time() if now is None else now
-    bucket = _rate_buckets.setdefault(ip, [])
     cutoff = now - RATE_WINDOW
+    if now - _last_sweep >= RATE_WINDOW or now < _last_sweep:
+        _last_sweep = now
+        for stale in [k for k, b in _rate_buckets.items()
+                      if not b or b[-1] <= cutoff]:
+            del _rate_buckets[stale]
+    bucket = _rate_buckets.setdefault(ip, [])
     bucket[:] = [t for t in bucket if t > cutoff]
     if len(bucket) >= RATE_LIMIT:
         return False
@@ -293,12 +506,17 @@ def _display_name_for(conn, token, label, contact_norm):
     return f"objector-{n + 1}"
 
 
-def file_objection(conn, raw, body, contact, label=None):
+def file_objection(conn, raw, body, contact, label=None, ip=None):
     """POST /api/object/<token> — validate the token, provision the objector
     writer (BEFORE the objection exists, so the seal path can attribute it;
     the 5ab35b3 fail-closed guard is the backstop, not the plan), insert the
     objection (channel='token'), burn a use, and return the immediate
     receipt {objection_id, body_hash, status_url}.
+
+    Refused writes leave a witness (Task 13): a 422 here is recorded in
+    object_refusals as 'malformed' with the token RESOLVED (it validated) —
+    unlike TokenInvalid failures, which the server records on its side of
+    the raise. The 422 response itself is unchanged.
 
     Privacy: the contact string is normalized (trim/lowercase) and lives in
     the local writer NAME only ("objector:<contact>"); the hub sees the
@@ -306,9 +524,11 @@ def file_objection(conn, raw, body, contact, label=None):
     token, promotion = validate_token(conn, raw)
     body = body.strip() if isinstance(body, str) else ""
     if not body:
+        record_refusal(conn, ip, "file", "malformed", token["id"])
         raise promotion_store.PromotionError("objection body required", 422)
     contact_norm = contact.strip().lower() if isinstance(contact, str) else ""
     if not contact_norm:
+        record_refusal(conn, ip, "file", "malformed", token["id"])
         raise promotion_store.PromotionError(
             "contact required (kept local — never sent to the hub)", 422)
     writer_name = f"objector:{contact_norm}"
@@ -327,10 +547,14 @@ def file_objection(conn, raw, body, contact, label=None):
                  (token["id"],))
     conn.commit()
     oid = cur.lastrowid
+    status_path = f"/object/{raw}/status/{oid}"
     return {
         "objection_id": oid,
         "body_hash": "sha256:" + hashlib.sha256(body.encode("utf-8")).hexdigest(),
-        "status_url": f"/object/{raw}/status/{oid}",
+        # Absolute when a public base is configured — the skeptic keeps this
+        # URL; it must resolve from THEIR machine, not just ours.
+        "status_url": (PUBLIC_BASE_URL + status_path) if PUBLIC_BASE_URL
+                      else status_path,
     }
 
 
@@ -350,25 +574,36 @@ def _validate_token_for_status(conn, raw, oid):
     (record hashes, thread slug, verify URLs — never contact data);
     revocation kills future FILING (validate_token, unchanged), not the
     DR 5.6 disclosure guarantee for already-filed objections — an operator
-    action must not silently sever an objector from their receipt."""
+    action must not silently sever an objector from their receipt.
+
+    TIMING NOTE (Task 13): same normalization as validate_token — every
+    failure mode computes the hash, runs the token lookup AND the objection
+    lookup (a dummy row/sentinel oid keeps the work uniform; perfect
+    invariance is not achievable in Python), constant-time hash compare."""
     ensure_tokens_table(conn)
+    supplied = hash_token(raw or "")
     row = conn.execute("SELECT * FROM fcp_tokens WHERE token_hash=?",
-                       (hash_token(raw or ""),)).fetchone()
-    if row is None:
-        raise TokenInvalid()
-    token = dict(row)
+                       (supplied,)).fetchone()
+    token = dict(row) if row is not None else dict(_DUMMY_TOKEN)
+    hash_ok = hmac.compare_digest(token["token_hash"], supplied)
     # deliberately NO revoked check here — see the policy note above
     try:
-        oid = int(oid)
+        oid_int = int(oid)
+        oid_ok = True
     except (TypeError, ValueError):
-        raise TokenInvalid()
+        oid_int, oid_ok = -1, False  # sentinel keeps the lookup running
     obj = conn.execute("SELECT * FROM promotion_objections WHERE id=?",
-                       (oid,)).fetchone()
-    if obj is None:
-        raise TokenInvalid()
-    obj = dict(obj)
-    if obj.get("token_id") is None or int(obj["token_id"]) != token["id"]:
-        raise TokenInvalid()  # a token reads only its own objections
+                       (oid_int,)).fetchone()
+    obj = dict(obj) if obj is not None else None
+    owns = (obj is not None and obj.get("token_id") is not None
+            and token["id"] is not None
+            and int(obj["token_id"]) == token["id"])
+    if not hash_ok:
+        raise TokenInvalid("unknown")
+    if not oid_ok:
+        raise TokenInvalid("malformed", token["id"])
+    if not owns:  # missing objection or another token's objection
+        raise TokenInvalid("unknown", token["id"])
     return token, obj
 
 
@@ -400,7 +635,7 @@ def objection_status(conn, raw, oid):
     try:
         promotion = promotion_store.get_promotion(conn, obj["promotion_id"])
     except promotion_store.PromotionError:
-        raise TokenInvalid()
+        raise TokenInvalid("unknown", token["id"])
     base = {
         "objection_id": obj["id"],
         "body_hash": "sha256:"
@@ -409,7 +644,9 @@ def objection_status(conn, raw, oid):
     }
     record_hash = obj.get("sealed_record_hash")
     if record_hash and promotion.get("thread_slug"):
-        hub = f"http://localhost:{seal.THREADHUB_PORT}"
+        # The externally reachable hub when configured — a receipt must
+        # never hand an external skeptic a localhost URL.
+        hub = THREADHUB_PUBLIC_BASE_URL or f"http://localhost:{seal.THREADHUB_PORT}"
         slug = promotion["thread_slug"]
         citation = promotion.get("citation_hash")
         writer = (writers.get_writer(conn, obj["author_writer"])

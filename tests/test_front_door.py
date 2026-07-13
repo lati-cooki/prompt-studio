@@ -1,0 +1,872 @@
+"""Task 13 — hosting hardening: the front door, before the first send.
+
+In-repo home for the front-door security surface (the git-ignored local
+test_security.py stays local). Covers:
+
+1. PUBLIC_MODE surface restriction (STUDIO_PUBLIC_MODE=1): ONLY the skeptic
+   surface is served — GET /object/<token>, POST /api/object/<token>,
+   GET /object/<token>/status/<oid>. Everything else answers the
+   byte-identical generic 404 the token paths use (no route-existence
+   oracle). Static assets: NONE on purpose — the objection page is fully
+   self-contained (inline CSS + inline JS), so public mode serves zero
+   static files and leaves no file-existence oracle.
+2. Operator-route bearer auth (STUDIO_OPERATOR_TOKEN) with honest,
+   config-derived posture strings — the posture text must describe the mode
+   the server is ACTUALLY in.
+3. Share/receipt URLs from config (STUDIO_PUBLIC_BASE_URL,
+   THREADHUB_PUBLIC_BASE_URL) — never from the Host header, and never a
+   localhost URL in a skeptic's receipt when public bases are configured.
+4. The real rate limiter: bucket eviction, env-tunable rate/window
+   (STUDIO_OBJECT_RATE), applied to ALL /object/* and /api/object/*
+   surfaces, generic 429 bodies.
+5. Timing normalization keeps the oracle set-tests byte-identical
+   (including under the limiter and the refusal audit).
+6. The refusal audit (object_refusals): insert-only witnesses per refusal
+   branch, prober-visible surface unchanged, operator-auth'd summary route.
+7. allow_reuse_address on the server class (TIME_WAIT hygiene).
+"""
+import json
+import os
+import sqlite3
+import sys
+import unittest
+from unittest.mock import patch
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import objections
+import seal
+import server
+from test_objections_api import TokenPathTestCase
+
+
+class FrontDoorCase(TokenPathTestCase):
+    """TokenPathTestCase (shared in-memory DB, operator writer provisioned,
+    rate buckets cleared) + a generic request helper."""
+
+    maxDiff = None
+
+    def _req(self, method, path, body=None, bearer=None, ip="203.0.113.5"):
+        h = self._h(ip)
+        h.path = path
+        h._set_body(b"" if body is None else json.dumps(body).encode())
+        if bearer is not None:
+            h._mock_headers["Authorization"] = f"Bearer {bearer}"
+        getattr(h, f"do_{method}")()
+        return h
+
+
+# ---------------------------------------------------------------------------
+# Deliverable 1 — PUBLIC_MODE surface restriction
+
+
+class TestPublicMode(FrontDoorCase):
+    # Route-by-route sweep material: every non-skeptic route the server
+    # knows, plus paths it does NOT know — in public mode they must be
+    # indistinguishable (no route-existence oracle).
+    NON_SKEPTIC = {
+        "GET": [
+            "/", "/sandbox", "/sandbox/", "/registry", "/threads",
+            "/js/app.js", "/registry-asset/INDEX.json",
+            "/api/sessions", "/api/prompts", "/api/registry",
+            "/api/promotions", "/api/promotions/1",
+            "/api/promotions/metrics", "/api/threads", "/api/threads/x",
+            "/api/threads/x/verify", "/api/challenge/demo",
+            "/api/challenge/j1", "/api/object-refusals",
+            "/object", "/favicon.ico", "/server.py", "/schema.sql",
+            "/no-such-route",
+        ],
+        "POST": [
+            "/api/sessions", "/api/prompts", "/api/chat", "/api/challenge",
+            "/api/threads/seal", "/api/prompts/p1/draft",
+            "/api/prompts/p1/1.0.0/validate",
+            "/api/prompts/p1/promote/1.0.0", "/api/prompts/p1/demote/1.0.0",
+            "/api/promotions/1/tokens", "/api/promotions/1/close",
+            "/api/promotions/1/waive", "/api/promotions/1/abort",
+            "/api/promotions/1/reseal", "/api/promotions/1/object",
+            "/api/promotions/1/tokens/1/revoke",
+            "/api/promotions/1/objections/1/resolve",
+            "/api/evals/e1/grade", "/api/object", "/api/objectx",
+            "/no-such-route",
+        ],
+        "PUT": ["/api/sessions/s1", "/api/prompts/p1", "/no-such-route"],
+        "DELETE": ["/api/sessions/s1", "/api/prompts/p1", "/no-such-route"],
+    }
+
+    def test_default_off_studio_routes_served(self):
+        self.assertFalse(objections.PUBLIC_MODE)  # env-off default
+        h = self._req("GET", "/api/prompts")
+        self.assertEqual(h._last_status, 200)
+
+    def test_public_mode_404s_every_non_skeptic_route_identically(self):
+        generic = objections.GENERIC_404_HTML.encode("utf-8")
+        with patch.object(objections, "PUBLIC_MODE", True):
+            bodies = set()
+            for method, paths in self.NON_SKEPTIC.items():
+                for path in paths:
+                    h = self._req(method, path, body={})
+                    self.assertEqual(h._last_status, 404, (method, path))
+                    bodies.add(h._body_written)
+        self.assertEqual(bodies, {generic})  # byte-identical, the ONE body
+
+    def test_public_mode_404s_options_too(self):
+        with patch.object(objections, "PUBLIC_MODE", True):
+            h = self._req("OPTIONS", "/api/prompts")
+            self.assertEqual(h._last_status, 404)
+            self.assertEqual(h._body_written,
+                             objections.GENERIC_404_HTML.encode("utf-8"))
+
+    def test_public_mode_serves_the_skeptic_surface(self):
+        p, minted = self._minted()
+        with patch.object(objections, "PUBLIC_MODE", True):
+            page = self._get_page(minted["token"])
+            self.assertEqual(page._last_status, 200)
+            h, _ = self._file(minted["token"])
+            self.assertEqual(h._last_status, 200)
+            receipt = h._json()
+            s = self._h()
+            s.path = f"/object/{minted['token']}/status/{receipt['objection_id']}"
+            s.do_GET()
+            self.assertEqual(s._last_status, 200)
+
+    def test_public_mode_token_failure_matches_the_wall(self):
+        # An invalid token on the SKEPTIC surface and a non-skeptic route
+        # behind the wall must be indistinguishable: same 404, same bytes.
+        with patch.object(objections, "PUBLIC_MODE", True):
+            invalid = self._get_page("bogus")
+            walled = self._req("GET", "/api/prompts")
+        self.assertEqual(invalid._last_status, 404)
+        self.assertEqual(walled._last_status, 404)
+        self.assertEqual(invalid._body_written, walled._body_written)
+
+
+# ---------------------------------------------------------------------------
+# Deliverable 2 — operator-route bearer auth + honest posture strings
+
+
+class TestOperatorAuth(FrontDoorCase):
+    # Every state-changing operator route (the brief's list plus sessions/
+    # chat — anything that writes or spends, except the skeptic surface).
+    STATE_CHANGING = [
+        ("POST", "/api/sessions"),
+        ("POST", "/api/prompts"),
+        ("POST", "/api/chat"),
+        ("POST", "/api/challenge"),
+        ("POST", "/api/threads/seal"),
+        ("POST", "/api/prompts/p1/draft"),
+        ("POST", "/api/prompts/p1/promote/1.0.0"),
+        ("POST", "/api/prompts/p1/demote/1.0.0"),
+        ("POST", "/api/promotions/1/tokens"),
+        ("POST", "/api/promotions/1/tokens/1/revoke"),
+        ("POST", "/api/promotions/1/close"),
+        ("POST", "/api/promotions/1/waive"),
+        ("POST", "/api/promotions/1/abort"),
+        ("POST", "/api/promotions/1/reseal"),
+        ("POST", "/api/promotions/1/object"),
+        ("POST", "/api/promotions/1/objections/1/resolve"),
+        ("POST", "/api/evals/e1/grade"),
+        ("PUT", "/api/sessions/s1"),
+        ("PUT", "/api/prompts/p1"),
+        ("DELETE", "/api/sessions/s1"),
+        ("DELETE", "/api/prompts/p1"),
+    ]
+
+    SESSION = {"id": "s9", "name": "n", "createdAt": "2026-01-01T00:00:00Z",
+               "updatedAt": "2026-01-01T00:00:00Z", "panes": [],
+               "vaultConfig": {}}
+
+    def test_auth_off_current_behavior(self):
+        self.assertIsNone(objections.OPERATOR_TOKEN)  # env-off default
+        h = self._req("POST", "/api/sessions", body=self.SESSION)
+        self.assertEqual(h._last_status, 200)
+
+    def test_auth_on_401_without_bearer_everywhere(self):
+        with patch.object(objections, "OPERATOR_TOKEN", "sekret"):
+            bodies = set()
+            for method, path in self.STATE_CHANGING:
+                h = self._req(method, path, body={})
+                self.assertEqual(h._last_status, 401, (method, path))
+                bodies.add(h._body_written)
+            self.assertEqual(len(bodies), 1)  # one plain body
+            self.assertNotIn(b"<", next(iter(bodies)))  # plain, not HTML
+
+    def test_auth_on_401_on_mismatch(self):
+        with patch.object(objections, "OPERATOR_TOKEN", "sekret"):
+            h = self._req("POST", "/api/sessions", body=self.SESSION,
+                          bearer="wrong")
+            self.assertEqual(h._last_status, 401)
+            # malformed scheme too
+            h = self._h()
+            h.path = "/api/sessions"
+            h._set_body(json.dumps(self.SESSION).encode())
+            h._mock_headers["Authorization"] = "Basic sekret"
+            h.do_POST()
+            self.assertEqual(h._last_status, 401)
+
+    def test_auth_on_correct_bearer_passes(self):
+        with patch.object(objections, "OPERATOR_TOKEN", "sekret"):
+            h = self._req("POST", "/api/sessions", body=self.SESSION,
+                          bearer="sekret")
+            self.assertEqual(h._last_status, 200)
+
+    def test_auth_on_skeptic_surface_needs_no_bearer(self):
+        p, minted = self._minted()
+        with patch.object(objections, "OPERATOR_TOKEN", "sekret"):
+            page = self._get_page(minted["token"])
+            self.assertEqual(page._last_status, 200)
+            h, _ = self._file(minted["token"])  # no Authorization header
+            self.assertEqual(h._last_status, 200)
+
+    def test_auth_on_reads_stay_open(self):
+        with patch.object(objections, "OPERATOR_TOKEN", "sekret"):
+            h = self._req("GET", "/api/prompts")
+            self.assertEqual(h._last_status, 200)
+
+    def test_public_mode_wall_wins_over_auth(self):
+        # In public mode an operator route must 404 generically even with
+        # the CORRECT bearer — reachability is the wall, and a 401-vs-404
+        # difference would be a route-existence oracle.
+        with patch.object(objections, "OPERATOR_TOKEN", "sekret"), \
+             patch.object(objections, "PUBLIC_MODE", True):
+            h = self._req("POST", "/api/sessions", body=self.SESSION,
+                          bearer="sekret")
+            self.assertEqual(h._last_status, 404)
+            self.assertEqual(h._body_written,
+                             objections.GENERIC_404_HTML.encode("utf-8"))
+
+
+class TestPostureHonesty(FrontDoorCase):
+    """The posture string is quoted in mint responses and sealed receipts —
+    it must describe the mode the server is ACTUALLY in, sentence by
+    sentence, derived from live config. Changed text applies to NEW mints
+    only; stored rows are never rewritten."""
+
+    def _mint_posture(self, bearer=None):
+        p = self._open_promotion()
+        h = self._req("POST", f"/api/promotions/{p['id']}/tokens", body={},
+                      bearer=bearer)
+        self.assertEqual(h._last_status, 200)
+        return h._json()["posture"]
+
+    def test_auth_off_posture_discloses_no_credential_check(self):
+        posture = self._mint_posture()
+        self.assertIn("no credential check", posture)
+        self.assertIn("deployment posture", posture)
+        self.assertIn("not enforced auth", posture)
+        # it must NOT claim enforcement that is not configured
+        self.assertNotIn("requires 'Authorization", posture)
+
+    def test_auth_on_posture_discloses_bearer_enforcement(self):
+        with patch.object(objections, "OPERATOR_TOKEN", "sekret"):
+            posture = self._mint_posture(bearer="sekret")
+        # a false "no credential check" while a bearer check is active
+        # would be a false disclosure
+        self.assertNotIn("no credential check", posture)
+        self.assertNotIn("not enforced auth", posture)
+        self.assertIn("STUDIO_OPERATOR_TOKEN is set", posture)
+        self.assertIn("Bearer", posture)
+
+    def test_posture_discloses_public_mode_state(self):
+        # public mode OFF (this server serves everything)
+        self.assertIn("STUDIO_PUBLIC_MODE is off", self._mint_posture())
+        # public mode ON: mint still happens on the operator's (private)
+        # instance in real life; here we just assert the string flips.
+        with patch.object(objections, "PUBLIC_MODE", True):
+            self.assertIn("STUDIO_PUBLIC_MODE is on",
+                          objections.posture_note())
+            self.assertIn("only the tokenized objection surface",
+                          objections.posture_note())
+
+
+# ---------------------------------------------------------------------------
+# Deliverable 3 — share/receipt URLs from config, never the Host header
+
+
+class TestConfigUrls(FrontDoorCase):
+    PUB = "https://objections.example.com"
+    HUB = "https://hub.example.com"
+
+    def _mint_with_host(self, host="evil.example.com:1337"):
+        p = self._open_promotion()
+        h = self._h()
+        h.path = f"/api/promotions/{p['id']}/tokens"
+        h._set_body(b"{}")
+        h._mock_headers["Host"] = host
+        h.do_POST()
+        self.assertEqual(h._last_status, 200)
+        return h._json()
+
+    def test_mint_url_ignores_host_header_when_base_unset(self):
+        minted = self._mint_with_host()
+        self.assertNotIn("evil.example.com", minted["url"])
+        self.assertEqual(minted["url"],
+                         f"http://localhost:{server.PORT}/object/{minted['token']}")
+
+    def test_mint_url_uses_public_base_when_set(self):
+        with patch.object(objections, "PUBLIC_BASE_URL", self.PUB):
+            minted = self._mint_with_host()
+        self.assertEqual(minted["url"], f"{self.PUB}/object/{minted['token']}")
+
+    def test_filing_receipt_status_url_uses_public_base(self):
+        p, minted = self._minted()
+        with patch.object(objections, "PUBLIC_BASE_URL", self.PUB):
+            h, _ = self._file(minted["token"])
+        receipt = h._json()
+        self.assertEqual(
+            receipt["status_url"],
+            f"{self.PUB}/object/{minted['token']}/status/{receipt['objection_id']}")
+
+    def _sealed_receipt(self):
+        """File, resolve, close with a mocked seal; return the status body."""
+        p, minted = self._minted()
+        h, _ = self._file(minted["token"])
+        oid = h._json()["objection_id"]
+        self.anchor.execute(
+            "UPDATE promotions SET closes_at='2000-01-01T00:00:00Z' WHERE id=?",
+            (p["id"],))
+        self.anchor.execute(
+            "UPDATE promotion_objections SET resolution='responded',"
+            " resolution_body='ok' WHERE promotion_id=?", (p["id"],))
+        self.anchor.commit()
+        records = [
+            {"seq": 0, "record_hash": "sha256:g0", "event_type": "ThreadCreated"},
+            {"seq": 1, "record_hash": "sha256:obj1",
+             "event_type": "ObjectionRaised"}]
+        with patch("seal.seal_decision",
+                   return_value={"slug": "promo-thread",
+                                 "citationHash": "sha256:head",
+                                 "records": records}):
+            hc = self._h()
+            hc.path = f"/api/promotions/{p['id']}/close"
+            hc._set_body(b"")
+            hc.do_POST()
+        self.assertEqual(hc._json()["sealed"], 1)
+        s = self._h()
+        s.path = f"/object/{minted['token']}/status/{oid}"
+        s.do_GET()
+        self.assertEqual(s._last_status, 200)
+        return s._json()
+
+    def test_receipt_hub_urls_default_to_local_hub(self):
+        body = self._sealed_receipt()
+        hub = f"http://localhost:{seal.THREADHUB_PORT}"
+        self.assertEqual(body["checker_url"], f"{hub}/verify.mjs")
+
+    def test_receipt_never_hands_a_skeptic_localhost_when_bases_set(self):
+        with patch.object(objections, "PUBLIC_BASE_URL", self.PUB), \
+             patch.object(objections, "THREADHUB_PUBLIC_BASE_URL", self.HUB):
+            body = self._sealed_receipt()
+        self.assertEqual(body["record_url"], f"{self.HUB}/r/sha256:obj1")
+        self.assertEqual(body["verify_url"],
+                         f"{self.HUB}/t/promo-thread/verify")
+        self.assertEqual(body["checker_url"], f"{self.HUB}/verify.mjs")
+        self.assertIn(f"{self.HUB}/verify.mjs", body["instructions"])
+        self.assertNotIn("localhost", json.dumps(body))
+        self.assertNotIn("127.0.0.1", json.dumps(body))
+
+    def test_host_header_never_used_for_url_construction(self):
+        # the code path is gone: no handler reads the Host header anymore
+        import inspect
+        src = inspect.getsource(server)
+        self.assertNotIn("headers.get('Host'", src)
+        self.assertNotIn('headers.get("Host"', src)
+
+
+# ---------------------------------------------------------------------------
+# Deliverable 4 — the rate limiter, real: eviction, env-tunable, ALL
+# /object/* surfaces, generic 429 bodies
+
+
+class TestRateLimiter(FrontDoorCase):
+    def _get(self, path, ip):
+        h = self._h(ip)
+        h.path = path
+        h.do_GET()
+        return h
+
+    def test_parse_rate_spec(self):
+        self.assertEqual(objections._parse_rate("10/60"), (10, 60.0))
+        self.assertEqual(objections._parse_rate("5"), (5, 60.0))
+        self.assertEqual(objections._parse_rate("20/30"), (20, 30.0))
+
+    def test_rate_is_tunable(self):
+        with patch.object(objections, "RATE_LIMIT", 3):
+            for i in range(3):
+                self.assertTrue(objections.allow_request("9.9.9.9",
+                                                         now=1000.0 + i))
+            self.assertFalse(objections.allow_request("9.9.9.9", now=1003.0))
+
+    def test_stale_buckets_are_evicted(self):
+        # no unbounded growth: a distinct-IP probe sweep must not leave a
+        # bucket per IP forever
+        objections.allow_request("10.0.0.1", now=1000.0)
+        objections.allow_request("10.0.0.2", now=1000.0)
+        self.assertIn("10.0.0.1", objections._rate_buckets)
+        later = 1000.0 + objections.RATE_WINDOW * 2
+        objections.allow_request("10.0.0.3", now=later)
+        self.assertNotIn("10.0.0.1", objections._rate_buckets)
+        self.assertNotIn("10.0.0.2", objections._rate_buckets)
+        self.assertIn("10.0.0.3", objections._rate_buckets)
+
+    def test_page_get_hits_the_limiter(self):
+        p, minted = self._minted()
+        ip = "198.51.100.9"
+        for _ in range(objections.RATE_LIMIT):
+            self._get(f"/object/{minted['token']}", ip)
+        h = self._get(f"/object/{minted['token']}", ip)
+        self.assertEqual(h._last_status, 429)
+        # generic body — and identical whether the token is valid or bogus
+        # (the limiter must not become the oracle the 404s refuse to be)
+        h2 = self._get("/object/bogus", ip)
+        self.assertEqual(h2._last_status, 429)
+        self.assertEqual(h._body_written, h2._body_written)
+        self.assertEqual(h._body_written,
+                         objections.GENERIC_429_HTML.encode("utf-8"))
+
+    def test_status_get_hits_the_limiter(self):
+        p, minted = self._minted()
+        h, _ = self._file(minted["token"])
+        oid = h._json()["objection_id"]
+        ip = "198.51.100.10"
+        for _ in range(objections.RATE_LIMIT):
+            self._get(f"/object/{minted['token']}/status/{oid}", ip)
+        s = self._get(f"/object/{minted['token']}/status/{oid}", ip)
+        self.assertEqual(s._last_status, 429)
+        self.assertEqual(s._json(), objections.GENERIC_429_JSON)
+
+    def test_api_post_and_page_share_one_budget(self):
+        ip = "198.51.100.11"
+        for _ in range(objections.RATE_LIMIT):
+            h = self._post_objection("bogus", {"body": "x", "contact": "a@b"},
+                                     ip=ip)
+            self.assertEqual(h._last_status, 404)
+        g = self._get("/object/bogus", ip)
+        self.assertEqual(g._last_status, 429)
+
+    def test_mint_route_not_limited(self):
+        ip = "198.51.100.12"
+        for _ in range(objections.RATE_LIMIT + 1):
+            self._get("/object/bogus", ip)
+        p = self._open_promotion()
+        h = self._h(ip)
+        h.path = f"/api/promotions/{p['id']}/tokens"
+        h._set_body(b"{}")
+        h.do_POST()
+        self.assertEqual(h._last_status, 200)
+
+
+# ---------------------------------------------------------------------------
+# Deliverable 5 — timing-channel normalization: uniform work per failure
+# mode (fetch-then-evaluate, constant-time hash comparison, no
+# unknown-token fast path). Perfect timing invariance is not achievable in
+# Python; these tests pin the STRUCTURAL property instead of wall clocks.
+
+
+class _TracingConn:
+    """Proxy conn recording every SQL statement executed through it."""
+
+    def __init__(self, conn):
+        self._conn = conn
+        self.statements = []
+
+    def execute(self, sql, *args):
+        self.statements.append(" ".join(sql.split()))
+        return self._conn.execute(sql, *args)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+class TestTimingNormalization(FrontDoorCase):
+    def _failure_tokens(self):
+        """(name, raw) for every distinguishable validate_token failure."""
+        p = self._open_promotion()
+        out = [("unknown", "not-a-token")]
+        for name, sabotage in (
+            ("revoked", "UPDATE fcp_tokens SET revoked=1 WHERE id=?"),
+            ("exhausted", "UPDATE fcp_tokens SET uses=use_limit WHERE id=?"),
+            ("expired",
+             "UPDATE fcp_tokens SET expires_at='2000-01-01T00:00:00Z' WHERE id=?"),
+        ):
+            minted = self._mint(p["id"])._json()
+            self.anchor.execute(sabotage, (minted["token_id"],))
+            self.anchor.commit()
+            out.append((name, minted["token"]))
+        closed = self._mint(p["id"])._json()
+        self.anchor.execute("UPDATE promotions SET state='aborted' WHERE id=?",
+                            (p["id"],))
+        self.anchor.commit()
+        out.append(("closed", closed["token"]))
+        return out
+
+    def test_no_unknown_token_fast_path(self):
+        # EVERY failure mode — the unknown token included — runs the token
+        # lookup AND the promotion lookup: no early return between queries.
+        counts = {}
+        for name, raw in self._failure_tokens():
+            tracing = _TracingConn(self.anchor)
+            with self.assertRaises(objections.TokenInvalid, msg=name):
+                objections.validate_token(tracing, raw)
+            joined = "\n".join(tracing.statements)
+            self.assertIn("FROM fcp_tokens", joined, name)
+            self.assertIn("FROM promotions", joined, name)
+            self.assertIn("FROM promotion_objections", joined, name)
+            counts[name] = len(tracing.statements)
+        # review rider: uniform DB work — the same NUMBER of statements no
+        # matter which check fails (the unknown-token dummy path included)
+        self.assertEqual(len(set(counts.values())), 1, counts)
+
+    def test_hash_comparison_is_constant_time(self):
+        import inspect
+        src = inspect.getsource(objections.validate_token)
+        self.assertIn("compare_digest", src)
+        src_status = inspect.getsource(objections._validate_token_for_status)
+        self.assertIn("compare_digest", src_status)
+
+    def test_status_route_no_fast_path_either(self):
+        p, minted = self._minted()
+        h, _ = self._file(minted["token"])
+        oid = h._json()["objection_id"]
+        # unknown token, malformed oid, foreign objection: all run the token
+        # lookup AND the objection lookup
+        for name, raw, o in (("unknown", "bogus", oid),
+                             ("malformed-oid", minted["token"], "abc"),
+                             ("foreign", minted["token"], oid + 99)):
+            tracing = _TracingConn(self.anchor)
+            with self.assertRaises(objections.TokenInvalid, msg=name):
+                objections._validate_token_for_status(tracing, raw, o)
+            joined = "\n".join(tracing.statements)
+            self.assertIn("FROM fcp_tokens", joined, name)
+            self.assertIn("FROM promotion_objections", joined, name)
+
+    def test_oracle_bodies_still_byte_identical_with_limiter_in_place(self):
+        # The extended oracle set-test: page + API + status failure bodies
+        # each collapse to ONE byte sequence, with the limiter and the
+        # refusal audit live on the path.
+        page_bodies, api_bodies = set(), set()
+        for i, (name, raw) in enumerate(self._failure_tokens()):
+            h = self._get_page(raw)
+            self.assertEqual(h._last_status, 404, name)
+            page_bodies.add(h._body_written)
+            h = self._post_objection(raw, {"body": "x", "contact": "a@b"},
+                                     ip=f"203.0.113.{100 + i}")
+            self.assertEqual(h._last_status, 404, name)
+            api_bodies.add(h._body_written)
+        self.assertEqual(len(page_bodies), 1)
+        self.assertEqual(len(api_bodies), 1)
+
+
+# ---------------------------------------------------------------------------
+# Deliverable 6 — the door witnesses its refusals (object_refusals):
+# insert-only local audit; prober-visible surface unchanged; operator-only
+# summary route.
+
+
+class TestRefusalAudit(FrontDoorCase):
+    def _rows(self):
+        try:
+            return [dict(r) for r in self.anchor.execute(
+                "SELECT * FROM object_refusals ORDER BY id")]
+        except sqlite3.OperationalError:
+            return []
+
+    def test_page_refusals_recorded_per_branch(self):
+        p = self._open_promotion()
+        cases = [("unknown", "not-a-token", None)]
+        for reason, sabotage in (
+            ("revoked", "UPDATE fcp_tokens SET revoked=1 WHERE id=?"),
+            ("exhausted", "UPDATE fcp_tokens SET uses=use_limit WHERE id=?"),
+            ("expired",
+             "UPDATE fcp_tokens SET expires_at='2000-01-01T00:00:00Z' WHERE id=?"),
+        ):
+            minted = self._mint(p["id"])._json()
+            self.anchor.execute(sabotage, (minted["token_id"],))
+            self.anchor.commit()
+            cases.append((reason, minted["token"], minted["token_id"]))
+        closed = self._mint(p["id"])._json()
+        self.anchor.execute("UPDATE promotions SET state='aborted' WHERE id=?",
+                            (p["id"],))
+        self.anchor.commit()
+        cases.append(("closed", closed["token"], closed["token_id"]))
+
+        bodies = set()
+        for reason, raw, _tid in cases:
+            h = self._get_page(raw)
+            self.assertEqual(h._last_status, 404, reason)
+            bodies.add(h._body_written)
+        self.assertEqual(len(bodies), 1)  # response bodies UNCHANGED
+
+        rows = self._rows()
+        self.assertEqual([r["reason_code"] for r in rows],
+                         [c[0] for c in cases])
+        for row, (reason, _raw, tid) in zip(rows, cases):
+            self.assertEqual(row["path_kind"], "page", reason)
+            self.assertEqual(row["token_id"], tid, reason)  # NULL iff unknown
+            self.assertEqual(row["ip"], "203.0.113.5")
+            self.assertTrue(row["ts"])
+
+    def test_malformed_object_path_recorded(self):
+        h = self._h()
+        h.path = "/object/whatever/junk"
+        h.do_GET()
+        self.assertEqual(h._last_status, 404)
+        rows = self._rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["reason_code"], "malformed")
+        self.assertEqual(rows[0]["path_kind"], "page")
+        self.assertIsNone(rows[0]["token_id"])
+
+    def test_file_refusals_recorded(self):
+        p, minted = self._minted()
+        # unknown token on the filing surface
+        self._post_objection("bogus", {"body": "x", "contact": "a@b"})
+        # malformed: valid token, missing body -> 422, token_id RESOLVED
+        h = self._post_objection(minted["token"], {"contact": "a@b"})
+        self.assertEqual(h._last_status, 422)
+        rows = self._rows()
+        self.assertEqual([(r["path_kind"], r["reason_code"]) for r in rows],
+                         [("file", "unknown"), ("file", "malformed")])
+        self.assertIsNone(rows[0]["token_id"])
+        self.assertEqual(rows[1]["token_id"], minted["token_id"])
+
+    def test_invalid_json_recorded_as_malformed(self):
+        h = self._h()
+        h.path = "/api/object/whatever"
+        h._set_body(b"{not json")
+        h.do_POST()
+        self.assertEqual(h._last_status, 400)
+        rows = self._rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["reason_code"], "malformed")
+        self.assertEqual(rows[0]["path_kind"], "file")
+        self.assertIsNone(rows[0]["token_id"])  # token never validated
+
+    def test_status_refusals_recorded(self):
+        p, minted = self._minted()
+        h, _ = self._file(minted["token"])
+        oid = h._json()["objection_id"]
+        s = self._h()
+        s.path = "/object/bogus/status/1"
+        s.do_GET()
+        self.assertEqual(s._last_status, 404)
+        s = self._h()
+        s.path = f"/object/{minted['token']}/status/abc"
+        s.do_GET()
+        self.assertEqual(s._last_status, 404)
+        rows = self._rows()
+        self.assertEqual([(r["path_kind"], r["reason_code"]) for r in rows],
+                         [("status", "unknown"), ("status", "malformed")])
+        self.assertEqual(rows[1]["token_id"], minted["token_id"])
+
+    def test_rate_limited_recorded(self):
+        ip = "198.51.100.20"
+        with patch.object(objections, "RATE_LIMIT", 2):
+            for _ in range(2):
+                self._post_objection("bogus", {"body": "x", "contact": "a@b"},
+                                     ip=ip)
+            h = self._post_objection("bogus", {"body": "x", "contact": "a@b"},
+                                     ip=ip)
+            self.assertEqual(h._last_status, 429)
+            g = self._h(ip)
+            g.path = "/object/bogus"
+            g.do_GET()
+            self.assertEqual(g._last_status, 429)
+        rows = [r for r in self._rows() if r["reason_code"] == "rate_limited"]
+        self.assertEqual([(r["path_kind"], r["ip"]) for r in rows],
+                         [("file", ip), ("page", ip)])
+
+    def test_successful_requests_leave_no_rows(self):
+        p, minted = self._minted()
+        self._get_page(minted["token"])
+        h, _ = self._file(minted["token"])
+        self.assertEqual(h._last_status, 200)
+        oid = h._json()["objection_id"]
+        s = self._h()
+        s.path = f"/object/{minted['token']}/status/{oid}"
+        s.do_GET()
+        self.assertEqual(s._last_status, 200)
+        self.assertEqual(self._rows(), [])
+
+    def test_table_is_insert_only(self):
+        objections.record_refusal(self.anchor, "1.2.3.4", "page", "unknown")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.anchor.execute(
+                "UPDATE object_refusals SET reason_code='revoked'")
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.anchor.execute("DELETE FROM object_refusals")
+        # enum discipline: unknown kinds/reasons refused at the schema
+        # (asserted with a raw INSERT — record_refusal itself never raises,
+        # by the prober-path invariant; it logs instead)
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.anchor.execute(
+                "INSERT INTO object_refusals (ts, ip, path_kind, reason_code)"
+                " VALUES ('2026-01-01T00:00:00Z', '1.2.3.4', 'page', 'nope')")
+
+    def test_audit_is_local_not_hub_sealed(self):
+        # per-probe hub seals would let a prober spam the permanent record;
+        # the rationale must be stated in the module docstring
+        self.assertIn("spam", objections.__doc__)
+        with patch("seal.seal_decision") as mock_seal, \
+             patch("seal._th") as mock_th:
+            self._post_objection("bogus", {"body": "x", "contact": "a@b"})
+        self.assertFalse(mock_seal.called)
+        self.assertFalse(mock_th.called)
+
+
+class TestRefusalSummaryRoute(FrontDoorCase):
+    def _seed(self):
+        self._post_objection("bogus", {"body": "x", "contact": "a@b"})
+        self._get_page("also-bogus")
+
+    def test_summary_counts_and_recent(self):
+        self._seed()
+        h = self._req("GET", "/api/object-refusals")
+        self.assertEqual(h._last_status, 200)
+        body = h._json()
+        self.assertEqual(body["counts"], {"unknown": 2})
+        self.assertEqual(body["total"], 2)
+        self.assertEqual(len(body["recent"]), 2)
+        self.assertEqual(body["recent"][0]["path_kind"], "page")  # newest first
+        self.assertIsNone(body["window_days"])
+
+    def test_summary_window_param(self):
+        self._seed()
+        h = self._req("GET", "/api/object-refusals?window=7")
+        self.assertEqual(h._last_status, 200)
+        self.assertEqual(h._json()["window_days"], 7)
+        self.assertEqual(h._json()["total"], 2)  # rows are recent
+        for bad in ("abc", "0", "-3"):
+            h = self._req("GET", f"/api/object-refusals?window={bad}")
+            self.assertEqual(h._last_status, 422, bad)
+
+    def test_summary_requires_operator_auth_when_on(self):
+        self._seed()
+        with patch.object(objections, "OPERATOR_TOKEN", "sekret"):
+            h = self._req("GET", "/api/object-refusals")
+            self.assertEqual(h._last_status, 401)
+            h = self._req("GET", "/api/object-refusals", bearer="wrong")
+            self.assertEqual(h._last_status, 401)
+            h = self._req("GET", "/api/object-refusals", bearer="sekret")
+            self.assertEqual(h._last_status, 200)
+
+    def test_summary_walled_off_in_public_mode(self):
+        with patch.object(objections, "PUBLIC_MODE", True), \
+             patch.object(objections, "OPERATOR_TOKEN", "sekret"):
+            h = self._req("GET", "/api/object-refusals", bearer="sekret")
+            self.assertEqual(h._last_status, 404)
+            self.assertEqual(h._body_written,
+                             objections.GENERIC_404_HTML.encode("utf-8"))
+
+
+# ---------------------------------------------------------------------------
+# Review fix (Important) — audit writes must NEVER break the prober path:
+# a failing refusal insert (disk full, locked DB, enum drift) must not turn
+# the byte-identical generic 404/429 into a dropped connection.
+
+
+class TestAuditFailureNeverBreaksProberPath(FrontDoorCase):
+    def _sabotage(self):
+        """Every audit write blows up before it can insert."""
+        return patch.object(
+            objections, "ensure_refusals_table",
+            side_effect=sqlite3.OperationalError("disk I/O error (simulated)"))
+
+    def test_page_branch(self):
+        with self._sabotage():
+            h = self._get_page("bogus")
+        self.assertEqual(h._last_status, 404)
+        self.assertEqual(h._body_written,
+                         objections.GENERIC_404_HTML.encode("utf-8"))
+
+    def test_api_branch(self):
+        with self._sabotage():
+            h = self._post_objection("bogus", {"body": "x", "contact": "a@b"})
+        self.assertEqual(h._last_status, 404)
+        self.assertEqual(h._json(), objections.GENERIC_404_JSON)
+
+    def test_status_branch(self):
+        with self._sabotage():
+            s = self._h()
+            s.path = "/object/bogus/status/1"
+            s.do_GET()
+        self.assertEqual(s._last_status, 404)
+        self.assertEqual(s._json(), objections.GENERIC_404_JSON)
+
+    def test_malformed_path_branch(self):
+        with self._sabotage():
+            h = self._h()
+            h.path = "/object/whatever/junk"
+            h.do_GET()
+        self.assertEqual(h._last_status, 404)
+        self.assertEqual(h._body_written,
+                         objections.GENERIC_404_HTML.encode("utf-8"))
+
+    def test_rate_limit_branches(self):
+        ip = "198.51.100.30"
+        with patch.object(objections, "RATE_LIMIT", 1), self._sabotage():
+            self._post_objection("bogus", {"body": "x", "contact": "a@b"},
+                                 ip=ip)
+            h = self._post_objection("bogus", {"body": "x", "contact": "a@b"},
+                                     ip=ip)
+            self.assertEqual(h._last_status, 429)
+            self.assertEqual(h._json(), objections.GENERIC_429_JSON)
+            g = self._h(ip)
+            g.path = "/object/bogus"
+            g.do_GET()
+            self.assertEqual(g._last_status, 429)
+            self.assertEqual(g._body_written,
+                             objections.GENERIC_429_HTML.encode("utf-8"))
+
+    def test_422_branch_response_unchanged(self):
+        p, minted = self._minted()
+        with self._sabotage():
+            h = self._post_objection(minted["token"], {"contact": "a@b"})
+        self.assertEqual(h._last_status, 422)
+        self.assertIn("body required", h._json()["error"])
+
+    def test_record_refusal_swallows_and_logs(self):
+        class BrokenConn:
+            def execute(self, *a, **k):
+                raise sqlite3.OperationalError("database is locked (simulated)")
+
+            def commit(self):
+                pass
+
+        with self.assertLogs(level="ERROR") as logs:
+            objections.record_refusal(BrokenConn(), "1.2.3.4", "page",
+                                      "unknown")  # must NOT raise
+        self.assertTrue(any("witness" in line for line in logs.output))
+
+
+# ---------------------------------------------------------------------------
+# Review fix (Minor) — malformed STUDIO_OBJECT_RATE still fails loud at
+# boot, but names the env var and the expected format.
+
+
+class TestRateSpecError(unittest.TestCase):
+    def test_malformed_spec_names_the_env_var(self):
+        for bad in ("abc", "10/x", "/60"):
+            with self.assertRaisesRegex(ValueError, "STUDIO_OBJECT_RATE"):
+                objections._parse_rate(bad)
+            with self.assertRaisesRegex(ValueError, "N/seconds"):
+                objections._parse_rate(bad)
+
+    def test_valid_specs_unaffected(self):
+        self.assertEqual(objections._parse_rate("10/60"), (10, 60.0))
+        self.assertEqual(objections._parse_rate("5"), (5, 60.0))
+
+
+# ---------------------------------------------------------------------------
+# Deliverable 7 — TIME_WAIT hygiene on the server class
+
+
+class TestServerClass(unittest.TestCase):
+    def test_allow_reuse_address(self):
+        import socketserver
+        self.assertTrue(issubclass(server.StudioTCPServer,
+                                   socketserver.TCPServer))
+        self.assertTrue(server.StudioTCPServer.allow_reuse_address)
+
+
+if __name__ == "__main__":
+    unittest.main()

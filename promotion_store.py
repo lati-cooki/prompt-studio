@@ -128,7 +128,7 @@ def metrics(conn, window_days=None):
 
 
 def open_promotion(conn, prompt_id, version, window_hours=24.0, evidence=None,
-                   actor="operator"):
+                   actor="operator", deliberation_slug=None):
     row = conn.execute("SELECT status FROM prompts WHERE id=? AND version=?",
                        (prompt_id, version)).fetchone()
     if row is None:
@@ -146,10 +146,11 @@ def open_promotion(conn, prompt_id, version, window_hours=24.0, evidence=None,
     cur = conn.execute(
         """INSERT INTO promotions
            (prompt_id, version, state, opened_at, window_hours, closes_at,
-            evidence_json, opened_by)
-           VALUES (?,?,?,?,?,?,?,?)""",
+            evidence_json, opened_by, deliberation_slug)
+           VALUES (?,?,?,?,?,?,?,?,?)""",
         (prompt_id, version, OPEN, _iso(opened), float(window_hours), _iso(closes),
-         json.dumps(evidence) if evidence is not None else None, actor))
+         json.dumps(evidence) if evidence is not None else None, actor,
+         deliberation_slug))
     conn.commit()
     return get_promotion(conn, cur.lastrowid)
 

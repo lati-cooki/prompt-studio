@@ -28,6 +28,12 @@ a.back { color: var(--ink-3); text-decoration: none; cursor: pointer; }
 .badge.ok { color: var(--green); }
 .badge.bad { color: var(--red); }
 .badge.pending { color: var(--ink-4); }
+.side { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+button.pub-toggle { font-family: var(--mono); font-size: 11px; padding: 1px 8px;
+  background: none; border: 1px solid var(--line); border-radius: 3px;
+  color: var(--ink-3); cursor: pointer; }
+button.pub-toggle:hover:not(:disabled) { border-color: var(--ink-3); color: var(--ink); }
+button.pub-toggle:disabled { opacity: 0.5; cursor: default; }
 .rec { padding: 8px 0; border-bottom: 1px solid var(--line); font-family: var(--mono); font-size: 12px; }
 .rec .k { color: var(--ink-3); }
 .err { color: var(--red); padding: 16px 0; }
@@ -77,11 +83,57 @@ async function showList() {
         <div class="title">${esc(t.title)}</div>
         <div class="meta">${esc(t.created_at)} · ${esc(t.created_by)}</div>
       </span>
-      <span class="badge pending" data-verify="${esc(t.slug)}">checking…</span>
+      <span class="side">
+        <span class="badge pending" data-verify="${esc(t.slug)}">checking…</span>
+        <span>
+          <span class="badge pending" data-pub="${esc(t.slug)}">pub?</span>
+          <button class="pub-toggle" data-slug="${esc(t.slug)}" disabled>…</button>
+        </span>
+      </span>
     </div>`).join('');
   view.querySelectorAll('.row').forEach(r =>
     r.addEventListener('click', () => showDetail(r.dataset.slug)));
-  threads.forEach(t => fillBadge(t.slug));
+  view.querySelectorAll('button.pub-toggle').forEach(b =>
+    b.addEventListener('click', togglePublish));
+  threads.forEach(t => { fillBadge(t.slug); fillPubBadge(t.slug); });
+}
+
+// ── publication (Task 15): the record is the state — the badge reads the
+// hub's effective publication state; the toggle appends the witnessed
+// publish/unpublish act through the operator route.
+async function fillPubBadge(slug) {
+  const el = view.querySelector(`[data-pub="${CSS.escape(slug)}"]`);
+  const btn = view.querySelector(`button.pub-toggle[data-slug="${CSS.escape(slug)}"]`);
+  if (!el) return;
+  try {
+    const s = await getJSON('/api/threads/' + encodeURIComponent(slug) + '/publication');
+    el.className = 'badge ' + (s.published ? 'ok' : 'pending');
+    el.textContent = s.published ? 'published' : 'unpublished';
+    if (btn) {
+      btn.textContent = s.published ? 'unpublish' : 'publish';
+      btn.dataset.published = s.published ? '1' : '';
+      btn.disabled = false;
+    }
+  } catch (e) {
+    el.className = 'badge bad';
+    el.textContent = 'pub ' + esc(e.message);
+    if (btn) btn.disabled = true;
+  }
+}
+
+async function togglePublish(ev) {
+  ev.stopPropagation(); // the row click opens the detail view
+  const btn = ev.currentTarget;
+  const slug = btn.dataset.slug;
+  const verb = btn.dataset.published ? 'unpublish' : 'publish';
+  btn.disabled = true;
+  btn.textContent = verb + 'ing…';
+  try {
+    const res = await fetch('/api/threads/' + encodeURIComponent(slug) + '/' + verb,
+                            { method: 'POST' });
+    if (!res.ok) throw new Error(res.status);
+  } catch (e) { /* the badge refresh below shows the hub's actual state */ }
+  fillPubBadge(slug);
 }
 
 async function fillBadge(slug) {

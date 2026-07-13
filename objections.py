@@ -69,6 +69,7 @@ import time
 from datetime import datetime, timezone
 
 import promotion_store
+import publication
 import seal
 import writers
 
@@ -306,8 +307,11 @@ def hash_token(raw):
 # ---------------------------------------------------------------------------
 # mint / revoke (operator surface)
 
+_UNSET = object()  # mint-time deliberation_slug: absent != explicit null
+
+
 def mint_token(conn, pid, invitee_label=None, use_limit=1,
-               created_by="operator"):
+               created_by="operator", deliberation_slug=_UNSET):
     """Mint a promotion-scoped objection token. Returns the mint response
     dict — the ONLY place the raw token ever appears; the DB keeps the hash.
 
@@ -338,6 +342,14 @@ def mint_token(conn, pid, invitee_label=None, use_limit=1,
             or use_limit < 1:
         raise promotion_store.PromotionError(
             "use_limit must be an integer >= 1", 422)
+    if deliberation_slug is not _UNSET:
+        # Task 15: mint-time override of the promotion's deliberation
+        # association (an operator act on the operator surface; the server
+        # validates the slug shape before it gets here). Explicit null
+        # clears; absent leaves the open-time association alone.
+        conn.execute("UPDATE promotions SET deliberation_slug=? WHERE id=?",
+                     (deliberation_slug, p["id"]))
+        p["deliberation_slug"] = deliberation_slug
     invitee_label = (invitee_label or "").strip() or None
     raw = secrets.token_urlsafe(32)
     cur = conn.execute(
@@ -356,6 +368,7 @@ def mint_token(conn, pid, invitee_label=None, use_limit=1,
         "expires_at": p["closes_at"],
         "use_limit": use_limit,
         "invitee_label": invitee_label,
+        "deliberation_slug": p.get("deliberation_slug"),
         "custody": CUSTODY_DISCLOSURE_MINT,
         "posture": posture_note(),
     }
@@ -705,6 +718,27 @@ def backfill_sealed_records(conn, promotion, records, slug=None):
 
 
 # ---------------------------------------------------------------------------
+# the doorstep link (Task 15, DR-2026-07-13 record-is-the-interface)
+
+def deliberation_link(promotion):
+    """The hub viewer URL for the promotion's associated deliberation
+    thread — ONLY when an association exists AND the thread is effectively
+    published on the hub (checked live at render time; the hub's record is
+    the state, never a local flag). Every other case — no association,
+    unpublished, hub unreachable — returns None: an unpublished association
+    must render NOTHING (no dead links, no slug leakage; DR-2026-07-13
+    rule 5: slugs are names, not credentials). The slug comes from stored
+    operator state, never from user input."""
+    slug = promotion.get("deliberation_slug")
+    if not slug:
+        return None
+    if not publication.is_published(slug):
+        return None
+    hub = THREADHUB_PUBLIC_BASE_URL or f"http://localhost:{seal.THREADHUB_PORT}"
+    return f"{hub}/t/{slug}/view"
+
+
+# ---------------------------------------------------------------------------
 # standalone page — server-rendered string template, no studio shell
 
 def _e(v):
@@ -716,12 +750,18 @@ def _js(v):
     return json.dumps(v).replace("<", "\\u003c").replace(">", "\\u003e")
 
 
-def render_object_page(promotion, token, raw):
+def render_object_page(promotion, token, raw, deliberation_url=None):
     """The outside skeptic's page: prompt id/version, window countdown,
     pinned-evidence hash or its disclosed absence, textarea + contact.
     EVERYTHING user-derived is escaped (_e for HTML, _js for the inline
     script). No studio shell, no JS dependencies beyond the countdown and
-    the fetch that files the objection."""
+    the fetch that files the objection.
+
+    deliberation_url (Task 15): the doorstep link, precomputed by the
+    caller via deliberation_link — rendered only when non-None, i.e. only
+    when the cited deliberation thread is associated AND effectively
+    published. None renders nothing at all (byte-identical to the
+    pre-Task-15 page)."""
     ev = promotion.get("evidence")
     if isinstance(ev, dict):
         evidence_html = (
@@ -735,6 +775,12 @@ def render_object_page(promotion, token, raw):
     greeting = ""
     if token.get("invitee_label"):
         greeting = f"<p>Invitation for: <b>{_e(token['invitee_label'])}</b></p>"
+    deliberation_html = ""
+    if deliberation_url:
+        deliberation_html = (
+            f'<p><a href="{_e(deliberation_url)}">Read the deliberation '
+            "this decision cites</a> — the sealed record, verifiable in "
+            "place.</p>")
     pid_v = f"{_e(promotion['prompt_id'])} {_e(promotion['version'])}"
     closes = _e(promotion["closes_at"])
     return f"""<!doctype html><html><head><meta charset="utf-8">
@@ -753,7 +799,7 @@ small{{color:#555}}
 <p>Promotion under final comment: <b>{pid_v}</b></p>
 {greeting}
 <p>Window closes at <code>{closes}</code> — <span id="countdown">…</span></p>
-{evidence_html}
+{evidence_html}{deliberation_html}
 <form id="f">
 <label>Your objection<br><textarea name="body" required></textarea></label>
 <label>Contact (stays with the studio operator; never published to the hub)<br>

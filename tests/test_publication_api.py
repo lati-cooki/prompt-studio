@@ -22,7 +22,9 @@ Covers:
 """
 import json
 import os
+import shutil
 import sqlite3
+import subprocess
 import sys
 import unittest
 import uuid
@@ -116,6 +118,103 @@ class TestEffectivePublication(unittest.TestCase):
             _env("clista.event", {"event_type": "ThreadPublished",
                                   "payload": {}}),
         ])["published"])
+
+
+# ---------------------------------------------------------------------------
+# drift alarm — the Python mirror vs the REAL hub function, same fixture
+# (review fix, Task 15). Path convention mirrors challenge.py's protocol-root
+# resolution: main monorepo checkout by default, env override supreme.
+
+HUB_PUBLICATION_JS = os.environ.get(
+    "THREADHUB_PUBLICATION_JS",
+    "/Users/troylatimer/Projects/clista/packages/threadhub/src/publication.js")
+NODE_BIN = shutil.which("node")
+DRIFT_TOOLING = bool(NODE_BIN and os.path.exists(HUB_PUBLICATION_JS))
+DRIFT_FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "fixtures", "publication_drift_cases.json")
+
+# node -e runner: feed the SAME fixture cases to the hub's own
+# effectivePublication and print {case_name: published} for comparison.
+_NODE_DRIFT_RUNNER = """
+const { effectivePublication } = require(process.argv[1]);
+const fs = require('node:fs');
+const fixture = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const out = {};
+for (const c of fixture.cases) out[c.name] = effectivePublication(c.envelopes).published;
+process.stdout.write(JSON.stringify(out));
+"""
+
+
+class TestDriftToolingPresence(unittest.TestCase):
+    """Missing drift tooling must be a LOUD failure, not a silent green skip
+    (tests/test_challenge.py's TestToolingPresence pattern). The drift test
+    below is the only alarm that fires when the hub's publication rules
+    change and the studio's mirror doesn't — drift is asymmetric in the
+    worst direction (hub tightens, studio doesn't → the studio renders a
+    doorstep link the hub 404s, a dead link in front of an invited
+    skeptic). This suite runs on the dev machine, where node and the main
+    monorepo checkout exist; if they don't, say so precisely instead of
+    letting the mirror go unwatched."""
+
+    def test_drift_tooling_available(self):
+        missing = []
+        if not NODE_BIN:
+            missing.append("node executable on PATH")
+        if not os.path.exists(HUB_PUBLICATION_JS):
+            missing.append(
+                f"hub publication.js at {HUB_PUBLICATION_JS} "
+                "(set THREADHUB_PUBLICATION_JS)")
+        self.assertFalse(
+            missing,
+            "publication drift tooling missing — the mirror-vs-hub drift "
+            "test is SKIPPING, which this sentinel refuses to let pass "
+            "silently:\n  " + "\n  ".join(missing))
+
+
+@unittest.skipUnless(DRIFT_TOOLING, "node + hub publication.js required")
+class TestMirrorMatchesHub(unittest.TestCase):
+    """Feed the shared fixture cases to BOTH implementations and assert
+    verdict equality case-by-case. The fixture's 'expected' values pin
+    today's semantics; the equality assertion is the drift alarm."""
+
+    REQUIRED_CASES = {
+        "publish-only", "publish-then-revoke", "revoke-then-republish",
+        "revoke-with-no-prior-publish",
+        "malformed-last-act-masks-earlier-publish", "wrong-scope",
+        "wrong-action-for-event-type",
+        "publication-payload-on-non-clista-kind-is-ignored", "empty-thread",
+    }
+
+    def test_python_mirror_agrees_with_hub_function_on_shared_fixture(self):
+        with open(DRIFT_FIXTURE) as f:
+            fixture = json.load(f)
+        names = {c["name"] for c in fixture["cases"]}
+        # a renamed/dropped case must not make this test vacuously green
+        self.assertTrue(self.REQUIRED_CASES <= names,
+                        f"fixture lost cases: {self.REQUIRED_CASES - names}")
+        proc = subprocess.run(
+            [NODE_BIN, "-e", _NODE_DRIFT_RUNNER,
+             HUB_PUBLICATION_JS, DRIFT_FIXTURE],
+            capture_output=True, text=True, timeout=30)
+        self.assertEqual(proc.returncode, 0,
+                         f"hub-side runner failed: {proc.stderr[:500]}")
+        hub_verdicts = json.loads(proc.stdout)
+        for case in fixture["cases"]:
+            name = case["name"]
+            py = publication.effective_publication(
+                case["envelopes"])["published"]
+            self.assertIn(name, hub_verdicts)
+            self.assertEqual(
+                py, hub_verdicts[name],
+                f"DRIFT on '{name}': studio mirror says {py}, hub's "
+                f"effectivePublication says {hub_verdicts[name]} — update "
+                "publication.effective_publication to match the hub "
+                "(publication.js) and extend this fixture")
+            self.assertEqual(
+                py, case["expected"],
+                f"semantics moved on '{name}': both implementations now say "
+                f"{py} but the fixture pinned {case['expected']} — if the "
+                "rule change is intended, update the fixture deliberately")
 
 
 class TestIsPublishedFailClosed(unittest.TestCase):
@@ -445,6 +544,36 @@ class TestDoorstepLink(ObjectionsTestCase):
         with patch("publication._fetch_envelopes",
                    side_effect=OSError("connection refused")):
             self.assertIsNone(objections.deliberation_link(promotion))
+
+    def test_hub_down_associated_page_is_byte_identical_to_unassociated(self):
+        # The end-to-end pin of the named-check property: during a hub
+        # outage an ASSOCIATED promotion's page must serve the exact bytes
+        # an UNASSOCIATED promotion serves (timing may differ — disclosed
+        # in publication._fetch_envelopes — but bytes never do).
+        p = promotion_store.open_promotion(
+            self.anchor, "p1", "1.0.0", deliberation_slug="delib-1")
+        with patch("publication.is_published", return_value=False):
+            mint = self._mint(p["id"])
+        raw = mint._json()["token"]
+
+        h1 = self._h()
+        h1.path = f"/object/{raw}"
+        with patch("publication._fetch_envelopes",
+                   side_effect=OSError("hub down")):
+            h1.do_GET()
+        self.assertEqual(h1._last_status, 200)
+
+        self.anchor.execute(
+            "UPDATE promotions SET deliberation_slug=NULL WHERE id=?",
+            (p["id"],))
+        self.anchor.commit()
+        h2 = self._h()
+        h2.path = f"/object/{raw}"
+        with patch("publication._fetch_envelopes", MagicMock()) as fetch:
+            h2.do_GET()
+        self.assertEqual(h2._last_status, 200)
+        fetch.assert_not_called()  # unassociated never even asks the hub
+        self.assertEqual(h1._body_written, h2._body_written)
 
 
 if __name__ == "__main__":

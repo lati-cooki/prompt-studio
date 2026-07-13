@@ -53,11 +53,20 @@ def _now_iso():
 
 def _fetch_envelopes(slug):
     """GET the thread's full record chain (/t/<slug>.json) from the local
-    hub — the list of record envelopes, in seq order."""
+    hub — the list of record envelopes, in seq order.
+
+    Timeout is SHORT (3s): this runs inline on the single-threaded studio
+    server, including on the public objection-page render when a promotion
+    is associated. Disclosed timing caveat (consistent with the D5
+    no-oracle posture, which pins BYTES): during a hub outage an associated
+    promotion's page stalls up to this timeout while an unassociated one
+    does not — the served bytes stay identical (fail closed to 'render
+    nothing'; the byte-equality is test-pinned), but the delay is
+    observable. Kept, disclosed, and bounded."""
     url = (f"http://localhost:{seal.THREADHUB_PORT}"
            f"/t/{urllib.parse.quote(slug)}.json")
     try:
-        with urllib.request.urlopen(url, timeout=10) as resp:
+        with urllib.request.urlopen(url, timeout=3) as resp:
             raw = resp.read().decode("utf-8")
     except urllib.error.HTTPError as e:
         if e.code == 404:
@@ -81,7 +90,10 @@ def _fetch_envelopes(slug):
 
 def effective_publication(envelopes):
     """Publication state as a pure function of the records — the Python
-    mirror of the hub's src/publication.js (keep the two in lockstep).
+    mirror of the hub's src/publication.js (keep the two in lockstep;
+    tests/test_publication_api.py feeds the shared fixture
+    tests/fixtures/publication_drift_cases.json to BOTH implementations,
+    so drift fails the suite instead of shipping a dead doorstep link).
     Returns {"published": bool, "act": threadPublication-dict-or-None}.
 
     Fail closed: a publication event that is malformed, carries an action

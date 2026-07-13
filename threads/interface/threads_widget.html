@@ -132,8 +132,15 @@ async function togglePublish(ev) {
     const res = await fetch('/api/threads/' + encodeURIComponent(slug) + '/' + verb,
                             { method: 'POST' });
     if (!res.ok) throw new Error(res.status);
-  } catch (e) { /* the badge refresh below shows the hub's actual state */ }
-  fillPubBadge(slug);
+    fillPubBadge(slug);
+  } catch (e) {
+    // Surface the refusal (e.g. 401 bearer-auth) instead of silently
+    // reverting; the button stays usable for a retry.
+    const el = view.querySelector(`[data-pub="${CSS.escape(slug)}"]`);
+    if (el) { el.className = 'badge bad'; el.textContent = verb + ' failed: ' + esc(e.message); }
+    btn.disabled = false;
+    btn.textContent = verb;
+  }
 }
 
 async function fillBadge(slug) {

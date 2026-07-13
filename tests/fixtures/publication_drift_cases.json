@@ -1,0 +1,399 @@
+{
+  "comment": "SHARED drift fixture (Task 15 review fix): these cases are fed to BOTH publication.effective_publication (the studio's Python mirror) and the hub's effectivePublication (packages/threadhub/src/publication.js, required via a node subprocess) by tests/test_publication_api.py. 'expected' pins today's semantics; the equality assertion is the drift alarm \u2014 if the hub's rules change and the mirror doesn't, this fixture makes the divergence a test failure, not a dead doorstep link in front of an invited skeptic.",
+  "cases": [
+    {
+      "name": "empty-thread",
+      "expected": false,
+      "envelopes": []
+    },
+    {
+      "name": "no-publication-event",
+      "expected": false,
+      "envelopes": [
+        {
+          "kind": "genesis",
+          "thread": "thd_1",
+          "payload": {
+            "title": "t"
+          }
+        },
+        {
+          "kind": "note",
+          "thread": "thd_1",
+          "payload": {
+            "n": 1
+          }
+        }
+      ]
+    },
+    {
+      "name": "publish-only",
+      "expected": true,
+      "envelopes": [
+        {
+          "kind": "genesis",
+          "thread": "thd_1",
+          "payload": {
+            "title": "t"
+          }
+        },
+        {
+          "kind": "note",
+          "thread": "thd_1",
+          "payload": {
+            "n": 1
+          }
+        },
+        {
+          "kind": "clista.event",
+          "thread": "thd_1",
+          "payload": {
+            "event_type": "ThreadPublished",
+            "actor_id": "id_troy",
+            "timestamp": "2026-07-12T00:00:00Z",
+            "payload": {
+              "threadPublication": {
+                "id": "tpb_fixture1",
+                "object": "threadPublication",
+                "threadId": "thd_1",
+                "action": "publish",
+                "scope": "public-read",
+                "publishedByParticipantId": "id_troy",
+                "publishedAt": "2026-07-12T00:00:00Z"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "publish-then-revoke",
+      "expected": false,
+      "envelopes": [
+        {
+          "kind": "genesis",
+          "thread": "thd_1",
+          "payload": {
+            "title": "t"
+          }
+        },
+        {
+          "kind": "clista.event",
+          "thread": "thd_1",
+          "payload": {
+            "event_type": "ThreadPublished",
+            "actor_id": "id_troy",
+            "timestamp": "2026-07-12T00:00:00Z",
+            "payload": {
+              "threadPublication": {
+                "id": "tpb_fixture1",
+                "object": "threadPublication",
+                "threadId": "thd_1",
+                "action": "publish",
+                "scope": "public-read",
+                "publishedByParticipantId": "id_troy",
+                "publishedAt": "2026-07-12T00:00:00Z"
+              }
+            }
+          }
+        },
+        {
+          "kind": "note",
+          "thread": "thd_1",
+          "payload": {
+            "n": 1
+          }
+        },
+        {
+          "kind": "clista.event",
+          "thread": "thd_1",
+          "payload": {
+            "event_type": "ThreadPublicationRevoked",
+            "actor_id": "id_troy",
+            "timestamp": "2026-07-12T00:00:00Z",
+            "payload": {
+              "threadPublication": {
+                "id": "tpb_fixture1",
+                "object": "threadPublication",
+                "threadId": "thd_1",
+                "action": "revoke",
+                "scope": "public-read",
+                "publishedByParticipantId": "id_troy",
+                "publishedAt": "2026-07-12T00:00:00Z"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "revoke-then-republish",
+      "expected": true,
+      "envelopes": [
+        {
+          "kind": "genesis",
+          "thread": "thd_1",
+          "payload": {
+            "title": "t"
+          }
+        },
+        {
+          "kind": "clista.event",
+          "thread": "thd_1",
+          "payload": {
+            "event_type": "ThreadPublished",
+            "actor_id": "id_troy",
+            "timestamp": "2026-07-12T00:00:00Z",
+            "payload": {
+              "threadPublication": {
+                "id": "tpb_fixture1",
+                "object": "threadPublication",
+                "threadId": "thd_1",
+                "action": "publish",
+                "scope": "public-read",
+                "publishedByParticipantId": "id_troy",
+                "publishedAt": "2026-07-12T00:00:00Z"
+              }
+            }
+          }
+        },
+        {
+          "kind": "clista.event",
+          "thread": "thd_1",
+          "payload": {
+            "event_type": "ThreadPublicationRevoked",
+            "actor_id": "id_troy",
+            "timestamp": "2026-07-12T00:00:00Z",
+            "payload": {
+              "threadPublication": {
+                "id": "tpb_fixture1",
+                "object": "threadPublication",
+                "threadId": "thd_1",
+                "action": "revoke",
+                "scope": "public-read",
+                "publishedByParticipantId": "id_troy",
+                "publishedAt": "2026-07-12T00:00:00Z"
+              }
+            }
+          }
+        },
+        {
+          "kind": "clista.event",
+          "thread": "thd_1",
+          "payload": {
+            "event_type": "ThreadPublished",
+            "actor_id": "id_troy",
+            "timestamp": "2026-07-12T00:00:00Z",
+            "payload": {
+              "threadPublication": {
+                "id": "tpb_fixture1",
+                "object": "threadPublication",
+                "threadId": "thd_1",
+                "action": "publish",
+                "scope": "public-read",
+                "publishedByParticipantId": "id_troy",
+                "publishedAt": "2026-07-12T00:00:00Z"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "revoke-with-no-prior-publish",
+      "expected": false,
+      "envelopes": [
+        {
+          "kind": "genesis",
+          "thread": "thd_1",
+          "payload": {
+            "title": "t"
+          }
+        },
+        {
+          "kind": "clista.event",
+          "thread": "thd_1",
+          "payload": {
+            "event_type": "ThreadPublicationRevoked",
+            "actor_id": "id_troy",
+            "timestamp": "2026-07-12T00:00:00Z",
+            "payload": {
+              "threadPublication": {
+                "id": "tpb_fixture1",
+                "object": "threadPublication",
+                "threadId": "thd_1",
+                "action": "revoke",
+                "scope": "public-read",
+                "publishedByParticipantId": "id_troy",
+                "publishedAt": "2026-07-12T00:00:00Z"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "malformed-last-act-masks-earlier-publish",
+      "expected": false,
+      "envelopes": [
+        {
+          "kind": "genesis",
+          "thread": "thd_1",
+          "payload": {
+            "title": "t"
+          }
+        },
+        {
+          "kind": "clista.event",
+          "thread": "thd_1",
+          "payload": {
+            "event_type": "ThreadPublished",
+            "actor_id": "id_troy",
+            "timestamp": "2026-07-12T00:00:00Z",
+            "payload": {
+              "threadPublication": {
+                "id": "tpb_fixture1",
+                "object": "threadPublication",
+                "threadId": "thd_1",
+                "action": "publish",
+                "scope": "public-read",
+                "publishedByParticipantId": "id_troy",
+                "publishedAt": "2026-07-12T00:00:00Z"
+              }
+            }
+          }
+        },
+        {
+          "kind": "clista.event",
+          "thread": "thd_1",
+          "payload": {
+            "event_type": "ThreadPublished",
+            "payload": {}
+          }
+        }
+      ]
+    },
+    {
+      "name": "wrong-scope",
+      "expected": false,
+      "envelopes": [
+        {
+          "kind": "genesis",
+          "thread": "thd_1",
+          "payload": {
+            "title": "t"
+          }
+        },
+        {
+          "kind": "clista.event",
+          "thread": "thd_1",
+          "payload": {
+            "event_type": "ThreadPublished",
+            "actor_id": "id_troy",
+            "timestamp": "2026-07-12T00:00:00Z",
+            "payload": {
+              "threadPublication": {
+                "id": "tpb_fixture1",
+                "object": "threadPublication",
+                "threadId": "thd_1",
+                "action": "publish",
+                "scope": "everyone",
+                "publishedByParticipantId": "id_troy",
+                "publishedAt": "2026-07-12T00:00:00Z"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "wrong-action-for-event-type",
+      "expected": false,
+      "envelopes": [
+        {
+          "kind": "genesis",
+          "thread": "thd_1",
+          "payload": {
+            "title": "t"
+          }
+        },
+        {
+          "kind": "clista.event",
+          "thread": "thd_1",
+          "payload": {
+            "event_type": "ThreadPublished",
+            "actor_id": "id_troy",
+            "timestamp": "2026-07-12T00:00:00Z",
+            "payload": {
+              "threadPublication": {
+                "id": "tpb_fixture1",
+                "object": "threadPublication",
+                "threadId": "thd_1",
+                "action": "revoke",
+                "scope": "public-read",
+                "publishedByParticipantId": "id_troy",
+                "publishedAt": "2026-07-12T00:00:00Z"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "publication-payload-on-non-clista-kind-is-ignored",
+      "expected": false,
+      "envelopes": [
+        {
+          "kind": "genesis",
+          "thread": "thd_1",
+          "payload": {
+            "title": "t"
+          }
+        },
+        {
+          "kind": "note",
+          "thread": "thd_1",
+          "payload": {
+            "event_type": "ThreadPublished",
+            "actor_id": "id_troy",
+            "timestamp": "2026-07-12T00:00:00Z",
+            "payload": {
+              "threadPublication": {
+                "id": "tpb_fixture1",
+                "object": "threadPublication",
+                "threadId": "thd_1",
+                "action": "publish",
+                "scope": "public-read",
+                "publishedByParticipantId": "id_troy",
+                "publishedAt": "2026-07-12T00:00:00Z"
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "missing-threadPublication-object",
+      "expected": false,
+      "envelopes": [
+        {
+          "kind": "genesis",
+          "thread": "thd_1",
+          "payload": {
+            "title": "t"
+          }
+        },
+        {
+          "kind": "clista.event",
+          "thread": "thd_1",
+          "payload": {
+            "event_type": "ThreadPublished",
+            "payload": {
+              "threadPublication": null
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

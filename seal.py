@@ -128,9 +128,42 @@ def ensure_author():
     return author_id
 
 
-def write_to_threadhub(events_path, title, question, author_id):
+def _author_for_event(event_type, writers, objection_index):
+    """Envelope author per record by ClisTa event_type (DR-phase5-topology 5.2:
+    semantic author = transport writer). Anything unmapped falls back to the
+    default writer (the operator in the promotion flow)."""
+    default = writers["default"]
+    if event_type == "ClaimCreated":
+        return writers.get("claim") or default
+    if event_type == "EvidenceCommitted":
+        return writers.get("evidence") or default  # grader, when known
+    if event_type == "ObjectionRaised":
+        objections = writers.get("objections") or []
+        if objection_index < len(objections) and objections[objection_index]:
+            return objections[objection_index]
+        return default
+    return default  # genesis / everything else
+
+
+def write_to_threadhub(events_path, title, question, writers):
+    """Write the authored ClisTa log to ThreadHub, one record per event line.
+
+    `writers` is either a legacy single author id (str — every request body is
+    byte-identical to the pre-slice-2 implementation) or a mapping:
+      {"default": id, "claim": id, "evidence": id, "objections": [id, ...]}
+    The n-th ObjectionRaised is authored by writers["objections"][n].
+
+    Returns {"slug", "citationHash", "records": [{seq, record_hash, event_type}]}
+    — the per-record shape is the Slice 6 (tokenized objections) receipt contract.
+    """
+    if isinstance(writers, str):
+        writers = {"default": writers}
+    default_author = writers["default"]
     slug = _capture(_th("POST", "/threads",
-                        {"title": title, "question": question, "author": author_id}), "slug")
+                        {"title": title, "question": question, "author": default_author}),
+                    "slug")
+    records = []
+    objection_index = 0
     try:
         with open(events_path) as f:
             for line in f:
@@ -142,13 +175,20 @@ def write_to_threadhub(events_path, title, question, author_id):
                 except (json.JSONDecodeError, ValueError):
                     raise SealError("authored ClisTa log contains a malformed line",
                                     status=500)
-                _th("POST", f"/t/{slug}/records",
-                    {"author": author_id, "kind": "clista.event", "payload": payload})
+                event_type = payload.get("event_type") if isinstance(payload, dict) else None
+                author = _author_for_event(event_type, writers, objection_index)
+                if event_type == "ObjectionRaised":
+                    objection_index += 1
+                resp = _th("POST", f"/t/{slug}/records",
+                           {"author": author, "kind": "clista.event", "payload": payload})
+                records.append({"seq": resp.get("seq"),
+                                "record_hash": resp.get("record_hash"),
+                                "event_type": event_type})
     except SealError as e:
         e.extra["partialSlug"] = slug
         raise
     verify = _th("GET", f"/t/{slug}/verify")
-    return {"slug": slug, "citationHash": verify.get("head")}
+    return {"slug": slug, "citationHash": verify.get("head"), "records": records}
 
 
 def validate_payload(payload):
@@ -196,12 +236,16 @@ def validate_payload(payload):
     }
 
 
-def seal_decision(payload):
+def seal_decision(payload, writers=None):
+    """Seal a decision. `writers` (optional mapping, see write_to_threadhub)
+    assigns a distinct custodial writer per record; without it the legacy
+    shared studio author is used, byte-identically to before."""
     data = validate_payload(payload)
     tmp = tempfile.mkdtemp(prefix="seal-")
     try:
         events_path = author_clista_log(data, tmp)
-        author_id = ensure_author()
-        return write_to_threadhub(events_path, data["title"], data["question"], author_id)
+        if writers is None:
+            writers = ensure_author()
+        return write_to_threadhub(events_path, data["title"], data["question"], writers)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

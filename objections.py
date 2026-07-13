@@ -277,7 +277,9 @@ def _display_name_for(conn, token, label, contact_norm):
     display_name reaches the hub, and the contact never does — that
     invariant is unconditional, not advisory."""
     for candidate in (token.get("invitee_label"), label):
-        candidate = (candidate or "").strip()
+        if not isinstance(candidate, str):
+            continue
+        candidate = candidate.strip()
         if candidate and contact_norm not in candidate.lower():
             return candidate
     n = conn.execute(
@@ -297,10 +299,10 @@ def file_objection(conn, raw, body, contact, label=None):
     the local writer NAME only ("objector:<contact>"); the hub sees the
     display_name and the minted identity id, never the contact."""
     token, promotion = validate_token(conn, raw)
-    body = (body or "").strip()
+    body = body.strip() if isinstance(body, str) else ""
     if not body:
         raise promotion_store.PromotionError("objection body required", 422)
-    contact_norm = (contact or "").strip().lower()
+    contact_norm = contact.strip().lower() if isinstance(contact, str) else ""
     if not contact_norm:
         raise promotion_store.PromotionError(
             "contact required (kept local — never sent to the hub)", 422)

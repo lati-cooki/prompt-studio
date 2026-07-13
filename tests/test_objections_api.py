@@ -409,6 +409,8 @@ class TestFileObjection(TokenPathTestCase):
         ).fetchone()[0], "objector-3")
 
     def test_contact_never_in_any_hub_bound_payload(self):
+        # Filing mints the identity; sealing writes the thread. The contact
+        # must appear in NEITHER set of hub-bound bytes.
         p, minted = self._minted()
         contact = "Sue.Skeptic@Example.COM"
         h, mock_th = self._file(minted["token"], contact=contact)
@@ -417,6 +419,41 @@ class TestFileObjection(TokenPathTestCase):
         for call in mock_th.call_args_list:
             wire = json.dumps([call.args, call.kwargs])
             self.assertNotIn(contact.lower(), wire.lower())
+        # now seal: elapse the window, resolve inline, close for real up to
+        # the seal boundary and inspect everything that would cross it
+        self.anchor.execute(
+            "UPDATE promotions SET closes_at='2000-01-01T00:00:00Z' WHERE id=?",
+            (p["id"],))
+        self.anchor.execute(
+            "UPDATE promotion_objections SET resolution='responded',"
+            " resolution_body='ok' WHERE promotion_id=?", (p["id"],))
+        self.anchor.commit()
+        with patch("seal.seal_decision",
+                   return_value={"slug": "s", "citationHash": "h",
+                                 "records": [{"seq": 4, "record_hash": "sha256:o1",
+                                              "event_type": "ObjectionRaised"}]}) as mock_seal:
+            hc = self._h()
+            hc.path = f"/api/promotions/{p['id']}/close"
+            hc._set_body(b"")
+            hc.do_POST()
+        self.assertEqual(hc._json()["sealed"], 1)
+        seal_wire = json.dumps([mock_seal.call_args.args,
+                                mock_seal.call_args.kwargs])
+        self.assertNotIn(contact.lower(), seal_wire.lower())
+
+    def test_non_string_json_values_rejected_not_crashed(self):
+        p, minted = self._minted(mint_body={"use_limit": 5})
+        for body in ({"body": ["x"], "contact": "a@b.c"},
+                     {"body": "x", "contact": {"e": "a@b.c"}},
+                     {"body": 7, "contact": "a@b.c"}):
+            h = self._post_objection(minted["token"], body)
+            self.assertEqual(h._last_status, 422, body)
+        # a non-string label must not crash either — it is just ignored
+        with patch("seal._th", return_value={"id": "id_obj"}):
+            h = self._post_objection(
+                minted["token"],
+                {"body": "concern", "contact": "a@b.c", "label": ["x"]})
+        self.assertEqual(h._last_status, 200)
 
     def test_body_and_contact_required(self):
         p, minted = self._minted(mint_body={"use_limit": 5})

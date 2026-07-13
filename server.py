@@ -265,8 +265,11 @@ def init_db():
         migrate_sessions(conn)
         migrate_db(conn)
         migrate_actor_columns(conn)
-        objections.ensure_tokens_table(conn)  # Slice 6 (guarded, idempotent)
         conn.executescript(schema)
+        # Slice 6 (guarded, idempotent) — after schema.sql so the promotions
+        # table fcp_tokens references exists first. Deliberately not IN
+        # schema.sql: see objections.ensure_tokens_table.
+        objections.ensure_tokens_table(conn)
         conn.commit()
         _seed_prompts_from_index(conn)
     finally:

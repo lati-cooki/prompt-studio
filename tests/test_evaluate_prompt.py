@@ -1,7 +1,12 @@
+import io
+import json
 import sys
 import os
+import tempfile
 import unittest
+from contextlib import redirect_stdout
 from datetime import date
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import scripts.evaluate_prompt as ep
@@ -80,6 +85,43 @@ class TestFormatEvalMarkdown(unittest.TestCase):
     def test_grade_placeholder_present(self):
         md = ep.format_eval_markdown(self._sample_data())
         self.assertIn("<!-- A / A- / B+ / B / C / F", md)
+
+    def test_run_by_writer_shown_when_present(self):
+        md = ep.format_eval_markdown({**self._sample_data(), "run_by": "delegate"})
+        self.assertIn("delegate", md)
+
+
+class TestWriterStamping(unittest.TestCase):
+    """Phase 5 slice 2: the invoking writer is stamped into the eval artifacts."""
+
+    def _run_main(self, extra_args):
+        with tempfile.TemporaryDirectory() as d:
+            prompt = os.path.join(d, "my_prompt_v1_0_0.md")
+            directive = os.path.join(d, "directive.md")
+            with open(prompt, "w") as f:
+                f.write("You are a helpful assistant.")
+            with open(directive, "w") as f:
+                f.write("Do the thing.")
+            fake_result = {"response_text": "ok",
+                           "tokens": {"input": 1, "output": 1, "cache_read": 0,
+                                      "total": 2}}
+            argv = ["evaluate_prompt.py", "--prompt", prompt,
+                    "--directive", directive, "--output-dir", d] + extra_args
+            with patch.object(ep, "run_eval", return_value=fake_result), \
+                 patch.object(sys, "argv", argv), redirect_stdout(io.StringIO()):
+                ep.main()
+            data_files = [f for f in os.listdir(d) if f.endswith("_data.json")]
+            self.assertEqual(len(data_files), 1)
+            with open(os.path.join(d, data_files[0])) as f:
+                return json.load(f)
+
+    def test_writer_stamped_into_eval_data(self):
+        data = self._run_main(["--writer", "delegate"])
+        self.assertEqual(data["run_by"], "delegate")
+
+    def test_writer_defaults_to_operator(self):
+        data = self._run_main([])
+        self.assertEqual(data["run_by"], "operator")
 
 
 if __name__ == "__main__":

@@ -24,8 +24,9 @@ def check_duplicate(index: dict, prompt_id: str, version: str) -> bool:
     return False
 
 
-def merge_eval_into_draft(draft: dict, eval_data: dict) -> dict:
-    """Produce a registry entry from draft + eval data. Removes the body field."""
+def merge_eval_into_draft(draft: dict, eval_data: dict, writer: str = "operator") -> dict:
+    """Produce a registry entry from draft + eval data. Removes the body field.
+    Stamps the invoking writer as registered_by (Phase 5 slice 2)."""
     grade = eval_data.get("grade")
     if grade is None:
         eval_status = "pending"
@@ -38,6 +39,7 @@ def merge_eval_into_draft(draft: dict, eval_data: dict) -> dict:
 
     entry["eval_status"] = eval_status
     entry["eval_batch"]  = eval_data["id"]
+    entry["registered_by"] = writer
 
     if eval_data.get("cost_usd_estimated") is not None:
         entry["cost_per_run_usd"] = eval_data["cost_usd_estimated"]
@@ -117,6 +119,8 @@ def main():
     parser.add_argument("--db",        default=os.environ.get("DB_PATH", "prompt_studio.db"),
                         help="Live studio DB to record the prompt in (skipped if absent)")
     parser.add_argument("--no-db",     action="store_true", help="Skip the DB write")
+    parser.add_argument("--writer",    default="operator",
+                        help="writer name to stamp as the invoking actor (Phase 5)")
     args = parser.parse_args()
 
     with open(args.draft) as f:
@@ -135,7 +139,7 @@ def main():
         print(f"ERROR: {prompt_id}@{version} already exists in {args.index}. Aborting.", file=sys.stderr)
         sys.exit(1)
 
-    entry = merge_eval_into_draft(draft, eval_data)
+    entry = merge_eval_into_draft(draft, eval_data, writer=args.writer)
     append_to_index(args.index, entry)
 
     print(f"Registered {prompt_id}@{version} → {args.index}")

@@ -104,6 +104,16 @@ class TestMergeEvalIntoDraft(unittest.TestCase):
         result = rp.merge_eval_into_draft(draft, eval_data)
         self.assertNotIn("body", result)
 
+    def test_registering_writer_stamped(self):
+        # Phase 5 slice 2: the invoking writer is stamped into the entry
+        result = rp.merge_eval_into_draft(_sample_draft(), _sample_eval_data(),
+                                          writer="delegate")
+        self.assertEqual(result["registered_by"], "delegate")
+
+    def test_registering_writer_defaults_to_operator(self):
+        result = rp.merge_eval_into_draft(_sample_draft(), _sample_eval_data())
+        self.assertEqual(result["registered_by"], "operator")
+
 
 class TestAppendToIndex(unittest.TestCase):
     def _write_index(self, tmp_dir, index):

@@ -41,6 +41,17 @@ CREATE TABLE IF NOT EXISTS evals (
     models_tested TEXT
 );
 
+-- Phase 5 slice 2: one DISTINCT custodial ThreadHub identity per studio writer
+-- (DR-phase5-topology 5.2). Custodial: the hub holds keys; only the id lives here (5.5).
+-- Keep in sync with writers.ensure_table (scripts hitting pre-slice-2 DB copies).
+CREATE TABLE IF NOT EXISTS writers (
+    name TEXT PRIMARY KEY,
+    threadhub_id TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    custodial INTEGER NOT NULL DEFAULT 1
+);
+
 CREATE TABLE IF NOT EXISTS promotions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     prompt_id TEXT NOT NULL,
@@ -55,7 +66,9 @@ CREATE TABLE IF NOT EXISTS promotions (
     citation_hash TEXT,
     sealed INTEGER NOT NULL DEFAULT 0,
     seal_error TEXT,
-    waive_reason TEXT
+    waive_reason TEXT,
+    opened_by TEXT,
+    resolved_by TEXT
 );
 
 CREATE TABLE IF NOT EXISTS promotion_objections (
@@ -64,5 +77,10 @@ CREATE TABLE IF NOT EXISTS promotion_objections (
     raised_at TEXT NOT NULL,
     body TEXT NOT NULL,
     resolution TEXT,
-    resolution_body TEXT
+    resolution_body TEXT,
+    author_writer TEXT,
+    resolved_by TEXT,
+    channel TEXT,
+    token_id TEXT,
+    sealed_record_hash TEXT
 );

@@ -80,6 +80,7 @@ def format_eval_markdown(data: dict) -> str:
 | Cache read tokens | {tokens['cache_read']:,} |
 | Total tokens | {tokens['total']:,} |
 | Cost estimate | ~{cost_str} |
+| Run by | {data.get('run_by') or 'unrecorded'} |
 
 ## Grade
 
@@ -147,6 +148,8 @@ def main():
     parser.add_argument("--directive",   default="registry/evals/strategiai_directive.md")
     parser.add_argument("--model",       default="claude-sonnet-4-6")
     parser.add_argument("--output-dir",  default="registry/evals/")
+    parser.add_argument("--writer",      default="operator",
+                        help="writer name to stamp as the invoking actor (Phase 5)")
     args = parser.parse_args()
 
     prompt_body, prompt_id, version = load_prompt(args.prompt)
@@ -170,6 +173,7 @@ def main():
         "response": result["response_text"],
         "grade": None,
         "notes": "",
+        "run_by": args.writer,
     }
 
     out_dir = Path(args.output_dir)

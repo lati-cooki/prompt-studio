@@ -71,6 +71,19 @@ class TestBuildSealPayload(unittest.TestCase):
         self.assertEqual(len(p["evidence"]), 1)  # must not raise
 
 
+class TestDecidedByWriter(unittest.TestCase):
+    def test_writer_dict_uses_display_name(self):
+        w = {"name": "operator", "threadhub_id": "id_troy", "display_name": "Troy",
+             "kind": "human", "custodial": True}
+        p = psl.build_seal_payload(promo(), "promoted", w)
+        self.assertEqual(p["decidedBy"], "Troy")
+        seal.validate_payload(p)  # must not raise
+
+    def test_plain_string_still_accepted(self):
+        p = psl.build_seal_payload(promo(), "promoted", "Prompt Studio owner")
+        self.assertEqual(p["decidedBy"], "Prompt Studio owner")
+
+
 class TestDemotionPayload(unittest.TestCase):
     def test_validates_and_references_superseded_slug(self):
         p = psl.build_demotion_payload("p1", "1.0.0", "superseded by 1.1.0",

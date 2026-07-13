@@ -8,10 +8,15 @@ import logging
 import sqlite3
 import urllib.request
 import urllib.error
+import urllib.parse
+import anchors
+import challenge
+import objections
 import seal
 import promotion_store
 import promotion_evidence
 import promotion_seal
+import writers
 
 def _load_dotenv(path=".env"):
     """Load key=value pairs from .env into os.environ (no-op if file absent)."""
@@ -34,6 +39,7 @@ except ImportError:
     anthropic = None
 
 DB_PATH = os.environ.get("DB_PATH", "prompt_studio.db")
+EVALS_DIR = os.environ.get("EVALS_DIR")  # None -> promotion_evidence default
 PORT = int(os.environ.get("PORT", 8000))
 MAX_BODY_BYTES = 10 * 1024 * 1024  # 10 MB
 THREADHUB_PORT = 8110
@@ -99,6 +105,30 @@ def migrate_db(conn):
     except Exception:
         conn.rollback()
         raise
+
+
+def migrate_actor_columns(conn):
+    """Phase 5 slice 2 (writer identity everywhere): thread the acting writer
+    through promotions and objections. Guarded pragma-table_info ALTERs —
+    idempotent, and a no-op on DBs that don't have the tables yet (schema.sql
+    creates them with these columns included). Pre-migration rows keep NULL:
+    the historical actor is unknown, not backfilled."""
+    def _cols(table):
+        return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+
+    additions = {
+        "promotions": ("opened_by", "resolved_by"),
+        "promotion_objections": ("author_writer", "resolved_by", "channel",
+                                 "token_id", "sealed_record_hash"),
+    }
+    for table, wanted in additions.items():
+        have = _cols(table)
+        if not have:
+            continue  # table doesn't exist yet; schema.sql will create it complete
+        for col in wanted:
+            if col not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} TEXT")
+    conn.commit()
 
 
 def migrate_sessions(conn):
@@ -235,7 +265,12 @@ def init_db():
     try:
         migrate_sessions(conn)
         migrate_db(conn)
+        migrate_actor_columns(conn)
         conn.executescript(schema)
+        # Slice 6 (guarded, idempotent) — after schema.sql so the promotions
+        # table fcp_tokens references exists first. Deliberately not IN
+        # schema.sql: see objections.ensure_tokens_table.
+        objections.ensure_tokens_table(conn)
         conn.commit()
         _seed_prompts_from_index(conn)
     finally:
@@ -333,8 +368,12 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_error(400)
                 return
             self.serve_file('registry/' + rel)
+        elif self.path.startswith('/api/challenge/'):
+            self.handle_get_challenge(self.path.removeprefix('/api/challenge/').split('?', 1)[0])
         elif self.path == '/api/promotions':
             self.handle_get_promotions()
+        elif self.path.split('?', 1)[0] == '/api/promotions/metrics':
+            self.handle_get_promotion_metrics()
         elif self.path.startswith('/api/promotions/'):
             self.handle_get_promotion(self.path.removeprefix('/api/promotions/'))
         elif self.path == '/api/threads' or self.path.startswith('/api/threads?'):
@@ -345,6 +384,8 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 self.handle_get_thread_verify(rest[:-len('/verify')])
             else:
                 self.handle_get_thread(rest)
+        elif self.path.startswith('/object/'):
+            self.handle_object_get(self.path.removeprefix('/object/'))
         elif self.path in ('/', '/sandbox', '/sandbox/'):
             self.serve_sandbox_index()
         elif self.path in ('/registry', '/registry/'):
@@ -436,16 +477,30 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             parts = self.path.removeprefix('/api/promotions/').split('/')
             if len(parts) == 2 and parts[1] in ('object', 'close', 'waive', 'abort', 'reseal'):
                 self.handle_promotion_action(parts[0], parts[1])
+            elif len(parts) == 2 and parts[1] == 'tokens':
+                self.handle_token_mint(parts[0])
+            elif len(parts) == 4 and parts[1] == 'tokens' and parts[3] == 'revoke':
+                self.handle_token_revoke(parts[0], parts[2])
             elif len(parts) == 4 and parts[1] == 'objections' and parts[3] == 'resolve':
                 self.handle_objection_resolve(parts[0], parts[2])
+            else:
+                self.send_error(404)
+        elif self.path.startswith('/api/evals/'):
+            parts = self.path.removeprefix('/api/evals/').split('/')
+            if len(parts) == 2 and parts[1] == 'grade':
+                self.handle_grade_eval(parts[0])
             else:
                 self.send_error(404)
         elif self.path == '/api/prompts':
             self.handle_post_prompts()
         elif self.path == '/api/chat':
             self.handle_post_chat()
+        elif self.path == '/api/challenge':
+            self.handle_post_challenge()
         elif self.path == '/api/threads/seal':
             self.handle_seal()
+        elif self.path.startswith('/api/object/'):
+            self.handle_object_post(self.path.removeprefix('/api/object/'))
         else:
             self.send_error(404)
 
@@ -733,22 +788,96 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                            (prompt_id, version)).fetchone()
         return (row["owner"] if row and row["owner"] else "Prompt Studio owner")
 
+    def _writers_for_promotion(self, conn, promotion):
+        """Resolve the per-record writer mapping for a promotion seal
+        (DR-phase5-topology 5.2: evidence author = grader, default = operator).
+
+        DB-lookup-only — the request path never mints identities. Until the
+        operator writer has been provisioned (writers.ensure_writer, run
+        deliberately, not mid-request), returns (None, legacy decidedBy) so the
+        seal falls back to the shared studio author instead of failing."""
+        operator = writers.get_writer(conn, "operator")
+        if operator is None:
+            return None, self._decided_by(
+                conn, promotion["prompt_id"], promotion["version"])
+
+        def _required(name, role):
+            # Fail-closed per the silent-action DR ("systems that cannot write
+            # at action time must fail the action rather than act unwitnessed"):
+            # a NAMED actor that cannot be resolved to a provisioned writer must
+            # fail the seal — a seal that misattributes their record to the
+            # operator is worse than a seal_error (DR 5.2: semantic author =
+            # transport writer). _seal_promotion turns this raise into recorded
+            # seal_error bookkeeping; reseal recovers once the writer is
+            # provisioned. Slice 6 MUST provision objector writers before
+            # sealing — this guard makes that a hard requirement, not a
+            # convention. Only a NULL/absent actor may use the default author.
+            w = writers.get_writer(conn, name)
+            if w is None:
+                raise writers.WriterError(
+                    f"{role} '{name}' is not a provisioned writer — refusing to "
+                    "seal misattributed (fail-closed); provision it via "
+                    "writers.ensure_writer, then reseal")
+            return w
+
+        resolved_by = promotion.get("resolved_by")
+        decider = _required(resolved_by, "deciding writer") if resolved_by else operator
+        writer_map = {"default": operator["threadhub_id"],
+                      "claim": decider["threadhub_id"]}
+        evidence = promotion.get("evidence")
+        if isinstance(evidence, dict) and evidence.get("graded_by"):
+            grader = writers.get_writer(conn, evidence["graded_by"])
+            if grader:  # unknown grader -> default author, absence not faked
+                writer_map["evidence"] = grader["threadhub_id"]
+        objection_ids = []
+        for o in promotion.get("objections", []):
+            name = o.get("author_writer")
+            ow = _required(name, "objection author") if name else operator
+            objection_ids.append(ow["threadhub_id"])
+        if objection_ids:
+            writer_map["objections"] = objection_ids
+        return writer_map, decider
+
     def _seal_promotion(self, conn, promotion, outcome):
         """Seal a terminal promotion; never raises — failure is recorded, not fatal.
         Payload construction lives inside the try too: malformed stored evidence
         (or anything else about this promotion) must record a seal_error, never
-        crash the request or leave the promotion permanently unresealable."""
+        crash the request or leave the promotion permanently unresealable.
+
+        After a successful seal the thread head is anchored (anchors.anchor_seal,
+        DR-phase5-topology Decision 4) and the anchored/anchor_error/
+        anchor_pushed/anchor_push_error fields ride on the response. Anchoring
+        happens OUTSIDE the try: anchor_seal never raises by contract, and an
+        anchoring failure must never be recorded as a seal_error — the seal
+        exists in the hub regardless (rule 2.1).
+
+        Slice 6: when the seal return carries the extended per-record list,
+        each objection's sealed_record_hash is back-filled from the n-th
+        ObjectionRaised record (count-asserted: a mismatch is recorded as a
+        seal_error with NO partial back-fill — see
+        objections.backfill_sealed_records). A legacy return without
+        'records' skips back-fill; those receipts simply stay at 'filed'."""
         try:
-            payload = promotion_seal.build_seal_payload(
-                promotion, outcome,
-                self._decided_by(conn, promotion["prompt_id"], promotion["version"]))
-            result = seal.seal_decision(payload)
-            return promotion_store.mark_seal_result(
+            writer_map, decided_by = self._writers_for_promotion(conn, promotion)
+            payload = promotion_seal.build_seal_payload(promotion, outcome, decided_by)
+            result = seal.seal_decision(payload, writers=writer_map)
+            if "records" in result:
+                objections.backfill_sealed_records(
+                    conn, promotion, result["records"], slug=result.get("slug"))
+            p = promotion_store.mark_seal_result(
                 conn, promotion["id"], slug=result["slug"],
                 citation_hash=result.get("citationHash"))
         except Exception as e:
+            # FIRST: discard any uncommitted work from the failed attempt —
+            # a mid-loop back-fill failure leaves earlier UPDATEs pending on
+            # this conn, and mark_seal_result ends in conn.commit(), which
+            # would otherwise smuggle a PARTIAL back-fill in beside the error
+            # bookkeeping (the count assertion only guards the mismatch mode).
+            conn.rollback()
             msg = getattr(e, "message", None) or str(e)
             return promotion_store.mark_seal_result(conn, promotion["id"], error=msg)
+        p.update(anchors.anchor_seal(result["slug"]))
+        return p
 
     def handle_post_promote(self, prompt_id, version):
         data = self.read_json_body()
@@ -791,6 +920,30 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         conn = self.get_db()
         try:
             self.send_json(promotion_store.list_promotions(conn))
+        finally:
+            conn.close()
+
+    def handle_get_promotion_metrics(self):
+        """GET /api/promotions/metrics?window=<days> — Slice 5 waive-ratio
+        metrics (DR-2026-07-12-fcp-metrics). window is a whole number of
+        days; absent means all-time."""
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        raw = query.get("window", [None])[0]
+        window_days = None
+        if raw is not None:
+            try:
+                window_days = int(raw)
+            except ValueError:
+                self.send_json({"error": "window must be a whole number of days"},
+                               status=422)
+                return
+            if window_days <= 0:
+                self.send_json({"error": "window must be a positive number of days"},
+                               status=422)
+                return
+        conn = self.get_db()
+        try:
+            self.send_json(promotion_store.metrics(conn, window_days))
         finally:
             conn.close()
 
@@ -859,6 +1012,167 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         finally:
             conn.close()
 
+    # -- Slice 6: the public /object/* surface -----------------------------
+
+    def _send_generic_404_page(self):
+        """The ONE page every /object/* validation failure gets — identical
+        bytes whether the token is unknown, revoked, exhausted, expired, or
+        its promotion closed (no oracle)."""
+        body = objections.GENERIC_404_HTML.encode('utf-8')
+        self.send_response(404)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def handle_object_get(self, rest):
+        parts = [urllib.parse.unquote(p) for p in rest.split('?', 1)[0].split('/')]
+        if len(parts) == 1 and parts[0]:
+            self.handle_object_page(parts[0])
+        elif len(parts) == 3 and parts[1] == 'status':
+            self.handle_object_status(parts[0], parts[2])
+        else:
+            self._send_generic_404_page()
+
+    def handle_object_page(self, raw):
+        """GET /object/<token> — the standalone objection page (no studio
+        shell; server-rendered string template, user-derived strings all
+        escaped in objections.render_object_page)."""
+        conn = self.get_db()
+        try:
+            try:
+                token, promotion = objections.validate_token(conn, raw)
+            except objections.TokenInvalid:
+                self._send_generic_404_page()
+                return
+        finally:
+            conn.close()
+        body = objections.render_object_page(promotion, token, raw).encode('utf-8')
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def handle_object_status(self, raw, oid):
+        conn = self.get_db()
+        try:
+            try:
+                self.send_json(objections.objection_status(conn, raw, oid))
+            except objections.TokenInvalid:
+                self.send_json(objections.GENERIC_404_JSON, status=404)
+        finally:
+            conn.close()
+
+    def handle_object_post(self, token):
+        """POST /api/object/<token> {body, contact, label?} — file the
+        objection. Rate-limited per IP (objections.allow_request) — the
+        ONLY rate-limited surface, per the plan: /api/object/* only."""
+        ip = self.client_address[0] if getattr(self, 'client_address', None) else '?'
+        if not objections.allow_request(ip):
+            self.send_json({"error": "rate limited — try again shortly"},
+                           status=429)
+            return
+        data = self.read_json_body()
+        if data is None:
+            return
+        conn = self.get_db()
+        try:
+            try:
+                receipt = objections.file_objection(
+                    conn, urllib.parse.unquote(token.split('?', 1)[0]),
+                    data.get("body"), data.get("contact"),
+                    label=data.get("label"))
+            except objections.TokenInvalid:
+                self.send_json(objections.GENERIC_404_JSON, status=404)
+                return
+            except promotion_store.PromotionError as e:
+                self._promotion_error(e)
+                return
+            except writers.WriterError as e:
+                self.send_json({"error": e.message}, status=e.status)
+                return
+            except seal.SealError as e:
+                body = {"error": e.message}
+                body.update(e.extra)
+                self.send_json(body, status=e.status)
+                return
+        finally:
+            conn.close()
+        self.send_json(receipt)
+
+    def handle_token_mint(self, pid):
+        """POST /api/promotions/<pid>/tokens {invitee_label?, use_limit?} —
+        mint an objection token (Slice 6). The raw token appears ONCE, in
+        this response; only its hash is stored. Refuses 409 when the
+        operator writer is unprovisioned (see objections.mint_token).
+        "Operator-only" is deployment posture (localhost), not enforced
+        auth — objections.POSTURE_NOTE rides on the response."""
+        data = self.read_json_body()
+        if data is None:
+            return
+        conn = self.get_db()
+        try:
+            try:
+                minted = objections.mint_token(
+                    conn, pid,
+                    invitee_label=data.get("invitee_label"),
+                    use_limit=data.get("use_limit", 1))
+            except promotion_store.PromotionError as e:
+                self._promotion_error(e)
+                return
+        finally:
+            conn.close()
+        host = self.headers.get('Host') or f"localhost:{PORT}"
+        minted["url"] = f"http://{host}{minted.pop('url_path')}"
+        self.send_json(minted)
+
+    def handle_token_revoke(self, pid, token_id):
+        conn = self.get_db()
+        try:
+            try:
+                self.send_json(objections.revoke_token(conn, pid, token_id))
+            except promotion_store.PromotionError as e:
+                self._promotion_error(e)
+        finally:
+            conn.close()
+
+    def handle_grade_eval(self, eval_id):
+        """POST /api/evals/<eval_id>/grade {grade, notes, writer} — grading is
+        an act with an actor. The writer name is resolved (minting its custodial
+        identity if this is its first act) BEFORE anything is stamped."""
+        if not is_safe_slug(eval_id):
+            self.send_error(400, "Invalid eval id")
+            return
+        data = self.read_json_body()
+        if data is None:
+            return
+        grade = (data.get("grade") or "").strip()
+        if not grade:
+            self.send_json({"error": "grade required"}, status=422)
+            return
+        writer_name = (data.get("writer") or "operator").strip()
+        conn = self.get_db()
+        try:
+            writer = writers.ensure_writer(conn, writer_name)
+        except writers.WriterError as e:
+            self.send_json({"error": e.message}, status=e.status)
+            return
+        except seal.SealError as e:
+            body = {"error": e.message}
+            body.update(e.extra)
+            self.send_json(body, status=e.status)
+            return
+        finally:
+            conn.close()
+        try:
+            result = promotion_evidence.grade_eval(
+                eval_id, grade, data.get("notes"), writer["name"], evals_dir=EVALS_DIR)
+        except promotion_evidence.GradeError as e:
+            self.send_json({"error": e.message}, status=e.status)
+            return
+        self.send_json(result, status=200)
+
     def handle_post_demote(self, prompt_id, version):
         data = self.read_json_body()
         if data is None:
@@ -895,10 +1209,13 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
                 self._decided_by(conn, prompt_id, version), superseded_slug=superseded)
             try:
                 result = seal.seal_decision(payload)
-                self.send_json({"status": "deprecated", "sealed": True, **result})
             except (seal.SealError, seal.SealValidationError) as e:
                 msg = getattr(e, "message", None) or str(e)
                 self.send_json({"status": "deprecated", "sealed": False, "seal_error": msg})
+            else:
+                anchor = anchors.anchor_seal(result["slug"])
+                self.send_json({"status": "deprecated", "sealed": True,
+                                **result, **anchor})
         finally:
             conn.close()
 
@@ -1028,6 +1345,54 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
 
+    # ── Slice 7: the Challenge Run (challenge.py owns the orchestration) ──
+
+    def handle_post_challenge(self):
+        """POST /api/challenge — validate fail-closed (only production prompts
+        with a sealed promotion thread are eligible as role system prompts;
+        anything else is a 409, never inlined silently), then spawn the run on
+        a daemon worker thread and return {job_id} immediately. This handler
+        stays quick — the single-threaded TCPServer must never wait on a model
+        call; the UI polls GET /api/challenge/<job_id>."""
+        data = self.read_json_body()
+        if data is None:
+            return
+        conn = self.get_db()
+        try:
+            try:
+                cfg = challenge.validate_request(conn, data)
+            except challenge.ChallengeError as e:
+                body = {"error": e.message}
+                body.update(e.extra)
+                self.send_json(body, status=e.status)
+                return
+        finally:
+            conn.close()
+        job_id = challenge.start_job(cfg)
+        self.send_json({"job_id": job_id}, status=202)
+
+    def handle_get_challenge(self, rest):
+        """GET /api/challenge/demo — the built-in fraud-threshold scenario.
+        GET /api/challenge/<job_id> — the polled job snapshot (status, stage,
+        event stream including any GateRejectionRecorded, result, error)."""
+        if rest == 'demo':
+            self.send_json({
+                "scenario": challenge.DEMO_SCENARIO,
+                "source": challenge.DEMO_SCENARIO_SOURCE,
+                "defaults": {
+                    "provider": challenge.DEFAULT_PROVIDER,
+                    "model": challenge.DEFAULT_MODEL,
+                    "rounds": challenge.DEFAULT_ROUNDS,
+                    "max_rounds": challenge.MAX_ROUNDS,
+                },
+            })
+            return
+        snapshot = challenge.get_job(rest)
+        if snapshot is None:
+            self.send_json({"error": "unknown challenge job"}, status=404)
+            return
+        self.send_json(snapshot)
+
     def handle_seal(self):
         data = self.read_json_body()
         if data is None:
@@ -1042,6 +1407,11 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             body.update(e.extra)
             self.send_json(body, status=e.status)
             return
+        # Seal is not done until the anchor commit exists or the failure is
+        # loudly reported (anchored/anchor_error — same pattern as
+        # sealed/seal_error). anchor_seal never raises; failure never unwinds
+        # the seal — the hub record already exists.
+        result.update(anchors.anchor_seal(result["slug"]))
         self.send_json(result, status=200)
 
     def handle_get_registry(self):

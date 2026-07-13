@@ -157,7 +157,13 @@ class TestThreadHubWrite(unittest.TestCase):
             out = seal.write_to_threadhub(events, "Ship?", "Ship?", "id_author")
         finally:
             os.remove(events)
-        self.assertEqual(out, {"slug": "ship-beta", "citationHash": "sha256:head"})
+        self.assertEqual(out, {"slug": "ship-beta", "citationHash": "sha256:head",
+                               "records": [
+                                   {"seq": 1, "record_hash": "sha256:a",
+                                    "event_type": "ThreadCreated"},
+                                   {"seq": 2, "record_hash": "sha256:b",
+                                    "event_type": "EvidenceCommitted"},
+                               ]})
         self.assertEqual(urlopen.call_count, 4)
 
     @patch("seal.urllib.request.urlopen",
@@ -201,6 +207,146 @@ class TestThreadHubWrite(unittest.TestCase):
         with self.assertRaises(seal.SealError) as ctx:
             seal._th("GET", "/threads")
         self.assertEqual(ctx.exception.status, 502)
+
+
+def _capture_requests(bodies):
+    """Return (urlopen side_effect, captured list). Captures (method, url, data bytes)."""
+    captured = []
+    responses = [_Resp(b) for b in bodies]
+
+    def side_effect(req, timeout=None):
+        captured.append((req.get_method(), req.full_url, req.data))
+        return responses.pop(0)
+
+    return side_effect, captured
+
+
+_EVENT_SEQUENCE = [
+    {"event_type": "ThreadCreated", "payload": {}},
+    {"event_type": "ParticipantDeclared", "payload": {}},
+    {"event_type": "EvidenceCommitted", "payload": {}},
+    {"event_type": "ClaimCreated", "payload": {}},
+    {"event_type": "ObjectionRaised", "payload": {"n": 0}},
+    {"event_type": "ObjectionRaised", "payload": {"n": 1}},
+]
+
+
+def _write_events(path, events=None):
+    with open(path, "w") as f:
+        for e in (events if events is not None else _EVENT_SEQUENCE):
+            f.write(json.dumps(e) + "\n")
+
+
+def _record_responses(n):
+    return ([{"slug": "s"}]
+            + [{"record_hash": f"sha256:{i}", "seq": i + 1} for i in range(n)]
+            + [{"valid": True, "head": "sha256:head"}])
+
+
+class TestPerRecordWriterIdentity(unittest.TestCase):
+    """Phase 5 slice 2: envelope author varies per record by ClisTa event_type
+    (DR 5.2 — semantic author = transport writer)."""
+
+    def _run(self, writers, events=None):
+        events_list = events if events is not None else _EVENT_SEQUENCE
+        side_effect, captured = _capture_requests(_record_responses(len(events_list)))
+        path = os.path.join(os.path.dirname(__file__), "_seal_writer_events.ndjson")
+        _write_events(path, events_list)
+        try:
+            with patch("seal.urllib.request.urlopen", side_effect=side_effect):
+                out = seal.write_to_threadhub(path, "T", "Q", writers)
+        finally:
+            os.remove(path)
+        return out, captured
+
+    def test_legacy_string_author_bodies_byte_identical(self):
+        """When no writers mapping is passed, every HTTP request body must be
+        byte-identical to what the pre-slice-2 implementation emitted."""
+        out, captured = self._run("id_legacy")
+        # exact bytes the legacy code produced, key order and all
+        expected_thread = json.dumps(
+            {"title": "T", "question": "Q", "author": "id_legacy"}).encode("utf-8")
+        self.assertEqual(captured[0][2], expected_thread)
+        for i, event in enumerate(_EVENT_SEQUENCE):
+            expected_record = json.dumps(
+                {"author": "id_legacy", "kind": "clista.event",
+                 "payload": event}).encode("utf-8")
+            self.assertEqual(captured[1 + i][2], expected_record)
+        self.assertIsNone(captured[-1][2])  # GET /verify has no body
+
+    def test_writers_mapping_varies_author_per_event_type(self):
+        writers = {
+            "default": "id_operator",
+            "claim": "id_claimant",
+            "evidence": "id_grader",
+            "objections": ["id_obj0", "id_obj1"],
+        }
+        out, captured = self._run(writers)
+        # thread creation (genesis) -> operator
+        self.assertEqual(json.loads(captured[0][2])["author"], "id_operator")
+        authors = [json.loads(c[2])["author"] for c in captured[1:-1]]
+        self.assertEqual(authors, [
+            "id_operator",   # ThreadCreated -> default
+            "id_operator",   # ParticipantDeclared -> default
+            "id_grader",     # EvidenceCommitted -> grader
+            "id_claimant",   # ClaimCreated -> claim writer
+            "id_obj0",       # 1st ObjectionRaised
+            "id_obj1",       # 2nd ObjectionRaised
+        ])
+
+    def test_missing_writer_keys_fall_back_to_default(self):
+        writers = {"default": "id_operator", "objections": ["id_obj0"]}
+        out, captured = self._run(writers)
+        authors = [json.loads(c[2])["author"] for c in captured[1:-1]]
+        self.assertEqual(authors, [
+            "id_operator", "id_operator",
+            "id_operator",   # no grader known -> default
+            "id_operator",   # no claim writer -> default
+            "id_obj0",       # 1st objection has a writer
+            "id_operator",   # 2nd objection past the list -> default
+        ])
+
+    def test_extended_return_carries_per_record_seq_hash_and_type(self):
+        out, captured = self._run({"default": "id_operator"})
+        self.assertEqual(out["slug"], "s")
+        self.assertEqual(out["citationHash"], "sha256:head")
+        self.assertEqual(len(out["records"]), len(_EVENT_SEQUENCE))
+        self.assertEqual(out["records"][0],
+                         {"seq": 1, "record_hash": "sha256:0",
+                          "event_type": "ThreadCreated"})
+        self.assertEqual(out["records"][3]["event_type"], "ClaimCreated")
+        self.assertEqual(out["records"][5],
+                         {"seq": 6, "record_hash": "sha256:5",
+                          "event_type": "ObjectionRaised"})
+
+
+class TestSealDecisionWriters(unittest.TestCase):
+    def _payload(self):
+        return {
+            "question": "Ship?", "decision": "Ship redacted", "decidedBy": "Troy",
+            "evidence": [{"source": "logs", "finding": "82% FAQ"}],
+            "objections": [],
+        }
+
+    @patch("seal.write_to_threadhub",
+           return_value={"slug": "s", "citationHash": "h", "records": []})
+    @patch("seal.ensure_author")
+    @patch("seal.author_clista_log", return_value="/tmp/x/.clista/events.ndjson")
+    def test_writers_mapping_passed_through_and_no_legacy_author(self, author, ensure, write):
+        writers = {"default": "id_operator", "claim": "id_operator"}
+        out = seal.seal_decision(self._payload(), writers=writers)
+        ensure.assert_not_called()  # distinct writers replace the shared author
+        self.assertEqual(write.call_args[0][3], writers)
+        self.assertEqual(out["records"], [])
+
+    @patch("seal.write_to_threadhub",
+           return_value={"slug": "s", "citationHash": "h", "records": []})
+    @patch("seal.ensure_author", return_value="id_studio")
+    @patch("seal.author_clista_log", return_value="/tmp/x/.clista/events.ndjson")
+    def test_no_writers_uses_legacy_shared_author(self, author, ensure, write):
+        seal.seal_decision(self._payload())
+        ensure.assert_called_once()
+        self.assertEqual(write.call_args[0][3], "id_studio")
 
 
 class TestEnsureAuthor(unittest.TestCase):

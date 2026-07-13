@@ -152,6 +152,61 @@ class TestWaiveAbortUpheld(unittest.TestCase):
             self.assertEqual(ctx.exception.status, 409)
 
 
+class TestActorThreading(unittest.TestCase):
+    """Phase 5 slice 2: every promotion act carries its acting writer."""
+
+    def test_open_defaults_actor_to_operator(self):
+        conn = make_db()
+        p = ps.open_promotion(conn, "p1", "1.0.0")
+        self.assertEqual(p["opened_by"], "operator")
+
+    def test_open_records_explicit_actor(self):
+        conn = make_db()
+        p = ps.open_promotion(conn, "p1", "1.0.0", actor="delegate")
+        self.assertEqual(p["opened_by"], "delegate")
+
+    def test_objection_records_author_writer(self):
+        conn = make_db()
+        p = ps.open_promotion(conn, "p1", "1.0.0")
+        o = ps.add_objection(conn, p["id"], "hold on")
+        self.assertEqual(o["author_writer"], "operator")
+        o2 = ps.add_objection(conn, p["id"], "me too", actor="objector-1")
+        self.assertEqual(o2["author_writer"], "objector-1")
+
+    def test_resolution_records_resolver_on_objection(self):
+        conn = make_db()
+        p = ps.open_promotion(conn, "p1", "1.0.0")
+        o = ps.add_objection(conn, p["id"], "hold on", actor="objector-1")
+        out = ps.resolve_objection(conn, p["id"], o["id"], "responded", "addressed",
+                                   actor="delegate")
+        obj = out["objections"][0]
+        self.assertEqual(obj["author_writer"], "objector-1")  # untouched
+        self.assertEqual(obj["resolved_by"], "delegate")
+
+    def test_close_waive_abort_record_resolved_by(self):
+        for fn, kwargs, actor in [
+            (ps.close_promotion, {}, None),                      # default
+            (ps.waive_promotion, {"reason": "solo"}, "delegate"),
+            (ps.abort_promotion, {}, "delegate"),
+        ]:
+            conn = make_db()
+            p = ps.open_promotion(conn, "p1", "1.0.0", window_hours=0)
+            if actor:
+                kwargs["actor"] = actor
+            args = [conn, p["id"]] + ([kwargs.pop("reason")] if "reason" in kwargs else [])
+            out = fn(*args, **kwargs)
+            self.assertEqual(out["resolved_by"], actor or "operator")
+
+    def test_upheld_resolution_stamps_resolver_on_promotion_abort(self):
+        conn = make_db()
+        p = ps.open_promotion(conn, "p1", "1.0.0")
+        o = ps.add_objection(conn, p["id"], "eval regressed")
+        out = ps.resolve_objection(conn, p["id"], o["id"], "upheld", "stands",
+                                   actor="delegate")
+        self.assertEqual(out["state"], "aborted")
+        self.assertEqual(out["resolved_by"], "delegate")
+
+
 class TestSealBookkeeping(unittest.TestCase):
     def test_mark_seal_success(self):
         conn = make_db()

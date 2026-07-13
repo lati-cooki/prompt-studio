@@ -91,6 +91,14 @@ class PromotionApiTestCase(unittest.TestCase):
             "INSERT INTO prompts (id, version, status) VALUES ('p1', '1.0.0', 'draft')"
         )
         self.anchor.commit()
+        # External anchoring is unit-tested in tests/test_anchors.py; stub it
+        # here so API tests never run git and never touch the live hub.
+        # Tests that assert on anchoring override self.anchor_seal.
+        anchor_patcher = patch(
+            "anchors.anchor_seal",
+            return_value={"anchored": True, "anchor_pushed": True})
+        self.anchor_seal = anchor_patcher.start()
+        self.addCleanup(anchor_patcher.stop)
 
     def tearDown(self):
         self.anchor.close()
@@ -345,6 +353,140 @@ class TestDemote(PromotionApiTestCase):
         self.assertEqual(row["status"], "draft")  # unchanged
 
 
+class TestAnchorWiring(PromotionApiTestCase):
+    """Every successful seal — promotion close/abort and demote — must attempt
+    an anchor and surface anchored/anchor_error/anchor_pushed/anchor_push_error
+    in the API response. Anchor failure never unwinds a seal."""
+
+    def _close(self, pid):
+        h = self._h()
+        h.path = f"/api/promotions/{pid}/close"
+        h._set_body(b"")
+        h.do_POST()
+        return h
+
+    def test_close_response_carries_anchor_fields(self):
+        p = self._open_promotion(window_hours=0)
+        with patch("seal.seal_decision", return_value={"slug": "s", "citationHash": "h"}):
+            h = self._close(p["id"])
+        result = h._json()
+        self.assertEqual(result["sealed"], 1)
+        self.assertEqual(result["anchored"], True)
+        self.assertEqual(result["anchor_pushed"], True)
+        self.anchor_seal.assert_called_once_with("s")
+
+    def test_close_anchor_failure_is_loud_and_seal_stands(self):
+        p = self._open_promotion(window_hours=0)
+        self.anchor_seal.return_value = {
+            "anchored": False, "anchor_error": "git commit failed: no user.email"}
+        with patch("seal.seal_decision", return_value={"slug": "s", "citationHash": "h"}):
+            h = self._close(p["id"])
+        result = h._json()
+        self.assertEqual(result["sealed"], 1)          # seal never unwound
+        self.assertEqual(result["thread_slug"], "s")
+        self.assertEqual(result["anchored"], False)
+        self.assertIn("anchor_error", result)
+        self.assertNotIn("seal_error", result["anchor_error"])  # distinct fields
+        row = self._prompt_row()
+        self.assertEqual(row["status"], "production")  # flip survives anchor failure
+
+    def test_close_push_failure_reported_distinctly(self):
+        p = self._open_promotion(window_hours=0)
+        self.anchor_seal.return_value = {
+            "anchored": True, "anchor_pushed": False,
+            "anchor_push_error": "git push failed: offline"}
+        with patch("seal.seal_decision", return_value={"slug": "s", "citationHash": "h"}):
+            h = self._close(p["id"])
+        result = h._json()
+        self.assertEqual(result["sealed"], 1)
+        self.assertEqual(result["anchored"], True)
+        self.assertEqual(result["anchor_pushed"], False)
+        self.assertIn("anchor_push_error", result)
+
+    def test_seal_failure_never_anchors(self):
+        p = self._open_promotion(window_hours=0)
+        with patch("seal.seal_decision",
+                   side_effect=seal.SealError("ThreadHub is not reachable")):
+            h = self._close(p["id"])
+        result = h._json()
+        self.assertEqual(result["sealed"], 0)
+        self.anchor_seal.assert_not_called()
+
+    def test_upheld_objection_abort_seal_is_anchored(self):
+        p = self._open_promotion(window_hours=24)
+        pid = p["id"]
+        h = self._h()
+        h.path = f"/api/promotions/{pid}/object"
+        h._set_body(json.dumps({"body": "coverage gap"}).encode())
+        h.do_POST()
+        oid = h._json()["id"]
+        with patch("seal.seal_decision", return_value={"slug": "abort-s", "citationHash": "ah"}):
+            h2 = self._h()
+            h2.path = f"/api/promotions/{pid}/objections/{oid}/resolve"
+            h2._set_body(json.dumps({"resolution": "upheld", "body": "stands"}).encode())
+            h2.do_POST()
+        result = h2._json()
+        self.assertEqual(result["state"], "aborted")
+        self.assertEqual(result["anchored"], True)
+        self.anchor_seal.assert_called_once_with("abort-s")
+
+    def _demote_after_close(self):
+        p = self._open_promotion(window_hours=0)
+        with patch("seal.seal_decision", return_value={"slug": "prod-slug", "citationHash": "ph"}):
+            self._close(p["id"])
+        self.anchor_seal.reset_mock()
+        with patch("seal.seal_decision", return_value={"slug": "demote-slug", "citationHash": "dh"}):
+            h = self._h()
+            h.path = "/api/prompts/p1/demote/1.0.0"
+            h._set_body(json.dumps({"reason": "superseded"}).encode())
+            h.do_POST()
+        return h
+
+    def test_demote_response_carries_anchor_fields(self):
+        h = self._demote_after_close()
+        result = h._json()
+        self.assertEqual(result["status"], "deprecated")
+        self.assertEqual(result["sealed"], True)
+        self.assertEqual(result["anchored"], True)
+        self.assertEqual(result["anchor_pushed"], True)
+        self.anchor_seal.assert_called_once_with("demote-slug")
+
+    def test_demote_anchor_failure_is_loud(self):
+        self.anchor_seal.return_value = {
+            "anchored": False, "anchor_error": "hub verify failed: unreachable"}
+        h = self._demote_after_close()
+        result = h._json()
+        self.assertEqual(result["status"], "deprecated")
+        self.assertEqual(result["sealed"], True)   # seal stands
+        self.assertEqual(result["anchored"], False)
+        self.assertIn("anchor_error", result)
+
+    def test_demote_push_failure_reported_distinctly(self):
+        self.anchor_seal.return_value = {
+            "anchored": True, "anchor_pushed": False,
+            "anchor_push_error": "git push failed: offline"}
+        h = self._demote_after_close()
+        result = h._json()
+        self.assertEqual(result["anchored"], True)
+        self.assertEqual(result["anchor_pushed"], False)
+        self.assertIn("anchor_push_error", result)
+
+    def test_demote_seal_failure_never_anchors(self):
+        p = self._open_promotion(window_hours=0)
+        with patch("seal.seal_decision", return_value={"slug": "prod-slug", "citationHash": "ph"}):
+            self._close(p["id"])
+        self.anchor_seal.reset_mock()
+        with patch("seal.seal_decision",
+                   side_effect=seal.SealError("ThreadHub is not reachable")):
+            h = self._h()
+            h.path = "/api/prompts/p1/demote/1.0.0"
+            h._set_body(json.dumps({"reason": "superseded"}).encode())
+            h.do_POST()
+        result = h._json()
+        self.assertEqual(result["sealed"], False)
+        self.anchor_seal.assert_not_called()
+
+
 class TestCreatePromptGuard(PromotionApiTestCase):
     """POST /api/prompts (create) must not let a caller mint status='production'
     with no FCP — same invariant handle_put_prompt already enforces."""
@@ -473,6 +615,211 @@ class TestSealNeverCrashesOnMalformedEvidence(PromotionApiTestCase):
         result2 = h2._json()
         self.assertEqual(result2["sealed"], 1)
         self.assertEqual(result2["thread_slug"], "fixed-slug")
+
+
+class TestSealWriterWiring(PromotionApiTestCase):
+    """Phase 5 slice 2: the promotion seal path assigns distinct writers per
+    record — evidence author is the grader, thread default is the operator.
+    Writer resolution is DB-lookup-only in the request path (no minting)."""
+
+    def _seed_writers(self):
+        self.anchor.executemany(
+            "INSERT INTO writers (name, threadhub_id, display_name, kind, custodial)"
+            " VALUES (?,?,?,?,1)",
+            [("operator", "id_troy", "Troy", "human"),
+             ("delegate", "id_del", "Claude (delegate)", "agent")])
+        self.anchor.commit()
+
+    def _graded_evidence(self):
+        return {"source_file": "eval_p1_v1_0_0_x_data.json", "model": "m",
+                "content_hash": "sha256:abc", "grade": "A-", "graded_by": "delegate"}
+
+    def test_close_seals_with_grader_as_evidence_author(self):
+        self._seed_writers()
+        p = self._open_promotion(window_hours=0,
+                                 evidence_patch_value=self._graded_evidence())
+
+        with patch("seal.seal_decision",
+                   return_value={"slug": "s", "citationHash": "h", "records": []}) as mock_seal:
+            h = self._h()
+            h.path = f"/api/promotions/{p['id']}/close"
+            h._set_body(b"")
+            h.do_POST()
+
+        self.assertEqual(h._last_status, 200)
+        mock_seal.assert_called_once()
+        payload = mock_seal.call_args[0][0]
+        writers_map = mock_seal.call_args.kwargs["writers"]
+        self.assertEqual(writers_map["default"], "id_troy")
+        self.assertEqual(writers_map["claim"], "id_troy")   # closed by operator
+        self.assertEqual(writers_map["evidence"], "id_del")  # grader authored the evidence
+        self.assertEqual(payload["decidedBy"], "Troy")
+
+    def test_objection_writers_threaded_in_order(self):
+        self._seed_writers()
+        p = self._open_promotion(window_hours=0,
+                                 evidence_patch_value=self._graded_evidence())
+        pid = p["id"]
+        for body in ("first concern", "second concern"):
+            h = self._h()
+            h.path = f"/api/promotions/{pid}/object"
+            h._set_body(json.dumps({"body": body}).encode())
+            h.do_POST()
+            oid = h._json()["id"]
+            h2 = self._h()
+            h2.path = f"/api/promotions/{pid}/objections/{oid}/resolve"
+            h2._set_body(json.dumps({"resolution": "responded", "body": "ok"}).encode())
+            h2.do_POST()
+
+        # Slice 6 count-asserts the back-fill: a seal return must carry one
+        # ObjectionRaised record per stored objection or it is a seal_error.
+        objection_records = [
+            {"seq": 4, "record_hash": "sha256:o1", "event_type": "ObjectionRaised"},
+            {"seq": 5, "record_hash": "sha256:o2", "event_type": "ObjectionRaised"}]
+        with patch("seal.seal_decision",
+                   return_value={"slug": "s", "citationHash": "h",
+                                 "records": objection_records}) as mock_seal:
+            h3 = self._h()
+            h3.path = f"/api/promotions/{pid}/close"
+            h3._set_body(b"")
+            h3.do_POST()
+
+        self.assertEqual(h3._json()["sealed"], 1)
+        writers_map = mock_seal.call_args.kwargs["writers"]
+        # objections were raised by the operator (default actor)
+        self.assertEqual(writers_map["objections"], ["id_troy", "id_troy"])
+
+    def test_unprovisioned_writers_fall_back_to_legacy_shared_author(self):
+        # writers table empty -> legacy single-author seal, decidedBy = owner
+        p = self._open_promotion(window_hours=0)
+        with patch("seal.seal_decision",
+                   return_value={"slug": "s", "citationHash": "h", "records": []}) as mock_seal:
+            h = self._h()
+            h.path = f"/api/promotions/{p['id']}/close"
+            h._set_body(b"")
+            h.do_POST()
+        self.assertEqual(h._last_status, 200)
+        self.assertIsNone(mock_seal.call_args.kwargs.get("writers"))
+        payload = mock_seal.call_args[0][0]
+        self.assertEqual(payload["decidedBy"], "Prompt Studio owner")
+
+    def test_unknown_grader_falls_back_to_default_writer(self):
+        self._seed_writers()
+        ev = dict(self._graded_evidence(), graded_by="somebody-unprovisioned")
+        p = self._open_promotion(window_hours=0, evidence_patch_value=ev)
+        with patch("seal.seal_decision",
+                   return_value={"slug": "s", "citationHash": "h", "records": []}) as mock_seal:
+            h = self._h()
+            h.path = f"/api/promotions/{p['id']}/close"
+            h._set_body(b"")
+            h.do_POST()
+        writers_map = mock_seal.call_args.kwargs["writers"]
+        self.assertNotIn("evidence", writers_map)  # unknown grader -> default author
+
+    def test_named_unprovisioned_objector_fails_closed_no_seal(self):
+        # DR 5.2 fail-closed: an objection whose author_writer NAMES a writer
+        # that is not provisioned must record a seal_error — never silently
+        # seal the objection as the operator (misattribution).
+        self._seed_writers()
+        p = self._open_promotion(window_hours=0,
+                                 evidence_patch_value=self._graded_evidence())
+        pid = p["id"]
+        h = self._h()
+        h.path = f"/api/promotions/{pid}/object"
+        h._set_body(json.dumps({"body": "external concern"}).encode())
+        h.do_POST()
+        oid = h._json()["id"]
+        h2 = self._h()
+        h2.path = f"/api/promotions/{pid}/objections/{oid}/resolve"
+        h2._set_body(json.dumps({"resolution": "responded", "body": "ok"}).encode())
+        h2.do_POST()
+        # simulate a slice-6-style named objector that was never provisioned
+        self.anchor.execute(
+            "UPDATE promotion_objections SET author_writer='objector-1' WHERE id=?",
+            (oid,))
+        self.anchor.commit()
+
+        with patch("seal.seal_decision") as mock_seal:
+            h3 = self._h()
+            h3.path = f"/api/promotions/{pid}/close"
+            h3._set_body(b"")
+            h3.do_POST()
+
+        self.assertEqual(h3._last_status, 200)  # bookkeeping, not a crash
+        result = h3._json()
+        self.assertEqual(result["sealed"], 0)
+        self.assertIn("objector-1", result["seal_error"])
+        mock_seal.assert_not_called()  # nothing written to the hub
+
+    def test_named_unprovisioned_decider_fails_closed_no_seal(self):
+        self._seed_writers()
+        p = self._open_promotion(window_hours=0,
+                                 evidence_patch_value=self._graded_evidence())
+        pid = p["id"]
+        # close with a seal failure so the promotion stays resealable
+        with patch("seal.seal_decision", side_effect=Exception("hub hiccup")):
+            h = self._h()
+            h.path = f"/api/promotions/{pid}/close"
+            h._set_body(b"")
+            h.do_POST()
+        # simulate a terminating actor that was never provisioned
+        self.anchor.execute(
+            "UPDATE promotions SET resolved_by='ghost-writer' WHERE id=?", (pid,))
+        self.anchor.commit()
+
+        with patch("seal.seal_decision") as mock_seal:
+            h2 = self._h()
+            h2.path = f"/api/promotions/{pid}/reseal"
+            h2._set_body(b"")
+            h2.do_POST()
+
+        result = h2._json()
+        self.assertEqual(result["sealed"], 0)
+        self.assertIn("ghost-writer", result["seal_error"])
+        mock_seal.assert_not_called()
+
+    def test_null_actor_columns_keep_legacy_default_author(self):
+        # NULL/absent author_writer and resolved_by (pre-migration rows) may
+        # use the default writer — only a NAMED unprovisioned actor fails.
+        self._seed_writers()
+        p = self._open_promotion(window_hours=0,
+                                 evidence_patch_value=self._graded_evidence())
+        pid = p["id"]
+        h = self._h()
+        h.path = f"/api/promotions/{pid}/object"
+        h._set_body(json.dumps({"body": "legacy concern"}).encode())
+        h.do_POST()
+        oid = h._json()["id"]
+        h2 = self._h()
+        h2.path = f"/api/promotions/{pid}/objections/{oid}/resolve"
+        h2._set_body(json.dumps({"resolution": "responded", "body": "ok"}).encode())
+        h2.do_POST()
+        with patch("seal.seal_decision", side_effect=Exception("hub hiccup")):
+            h3 = self._h()
+            h3.path = f"/api/promotions/{pid}/close"
+            h3._set_body(b"")
+            h3.do_POST()
+        # pre-slice-2 shape: no recorded actors at all
+        self.anchor.execute(
+            "UPDATE promotions SET resolved_by=NULL WHERE id=?", (pid,))
+        self.anchor.execute(
+            "UPDATE promotion_objections SET author_writer=NULL WHERE id=?", (oid,))
+        self.anchor.commit()
+
+        with patch("seal.seal_decision",
+                   return_value={"slug": "s", "citationHash": "h",
+                                 "records": [{"seq": 4, "record_hash": "sha256:o1",
+                                              "event_type": "ObjectionRaised"}]}) as mock_seal:
+            h4 = self._h()
+            h4.path = f"/api/promotions/{pid}/reseal"
+            h4._set_body(b"")
+            h4.do_POST()
+
+        result = h4._json()
+        self.assertEqual(result["sealed"], 1)
+        writers_map = mock_seal.call_args.kwargs["writers"]
+        self.assertEqual(writers_map["claim"], "id_troy")          # default decider
+        self.assertEqual(writers_map["objections"], ["id_troy"])  # default author
 
 
 if __name__ == "__main__":

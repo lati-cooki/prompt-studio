@@ -63,8 +63,7 @@ def _fetch_envelopes(slug):
     does not — the served bytes stay identical (fail closed to 'render
     nothing'; the byte-equality is test-pinned), but the delay is
     observable. Kept, disclosed, and bounded."""
-    url = (f"http://localhost:{seal.THREADHUB_PORT}"
-           f"/t/{urllib.parse.quote(slug)}.json")
+    url = f"{seal._hub_base()}/t/{urllib.parse.quote(slug)}.json"
     try:
         with urllib.request.urlopen(url, timeout=3) as resp:
             raw = resp.read().decode("utf-8")

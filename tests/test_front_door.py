@@ -140,5 +140,143 @@ class TestPublicMode(FrontDoorCase):
         self.assertEqual(invalid._body_written, walled._body_written)
 
 
+# ---------------------------------------------------------------------------
+# Deliverable 2 — operator-route bearer auth + honest posture strings
+
+
+class TestOperatorAuth(FrontDoorCase):
+    # Every state-changing operator route (the brief's list plus sessions/
+    # chat — anything that writes or spends, except the skeptic surface).
+    STATE_CHANGING = [
+        ("POST", "/api/sessions"),
+        ("POST", "/api/prompts"),
+        ("POST", "/api/chat"),
+        ("POST", "/api/challenge"),
+        ("POST", "/api/threads/seal"),
+        ("POST", "/api/prompts/p1/draft"),
+        ("POST", "/api/prompts/p1/promote/1.0.0"),
+        ("POST", "/api/prompts/p1/demote/1.0.0"),
+        ("POST", "/api/promotions/1/tokens"),
+        ("POST", "/api/promotions/1/tokens/1/revoke"),
+        ("POST", "/api/promotions/1/close"),
+        ("POST", "/api/promotions/1/waive"),
+        ("POST", "/api/promotions/1/abort"),
+        ("POST", "/api/promotions/1/reseal"),
+        ("POST", "/api/promotions/1/object"),
+        ("POST", "/api/promotions/1/objections/1/resolve"),
+        ("POST", "/api/evals/e1/grade"),
+        ("PUT", "/api/sessions/s1"),
+        ("PUT", "/api/prompts/p1"),
+        ("DELETE", "/api/sessions/s1"),
+        ("DELETE", "/api/prompts/p1"),
+    ]
+
+    SESSION = {"id": "s9", "name": "n", "createdAt": "2026-01-01T00:00:00Z",
+               "updatedAt": "2026-01-01T00:00:00Z", "panes": [],
+               "vaultConfig": {}}
+
+    def test_auth_off_current_behavior(self):
+        self.assertIsNone(objections.OPERATOR_TOKEN)  # env-off default
+        h = self._req("POST", "/api/sessions", body=self.SESSION)
+        self.assertEqual(h._last_status, 200)
+
+    def test_auth_on_401_without_bearer_everywhere(self):
+        with patch.object(objections, "OPERATOR_TOKEN", "sekret"):
+            bodies = set()
+            for method, path in self.STATE_CHANGING:
+                h = self._req(method, path, body={})
+                self.assertEqual(h._last_status, 401, (method, path))
+                bodies.add(h._body_written)
+            self.assertEqual(len(bodies), 1)  # one plain body
+            self.assertNotIn(b"<", next(iter(bodies)))  # plain, not HTML
+
+    def test_auth_on_401_on_mismatch(self):
+        with patch.object(objections, "OPERATOR_TOKEN", "sekret"):
+            h = self._req("POST", "/api/sessions", body=self.SESSION,
+                          bearer="wrong")
+            self.assertEqual(h._last_status, 401)
+            # malformed scheme too
+            h = self._h()
+            h.path = "/api/sessions"
+            h._set_body(json.dumps(self.SESSION).encode())
+            h._mock_headers["Authorization"] = "Basic sekret"
+            h.do_POST()
+            self.assertEqual(h._last_status, 401)
+
+    def test_auth_on_correct_bearer_passes(self):
+        with patch.object(objections, "OPERATOR_TOKEN", "sekret"):
+            h = self._req("POST", "/api/sessions", body=self.SESSION,
+                          bearer="sekret")
+            self.assertEqual(h._last_status, 200)
+
+    def test_auth_on_skeptic_surface_needs_no_bearer(self):
+        p, minted = self._minted()
+        with patch.object(objections, "OPERATOR_TOKEN", "sekret"):
+            page = self._get_page(minted["token"])
+            self.assertEqual(page._last_status, 200)
+            h, _ = self._file(minted["token"])  # no Authorization header
+            self.assertEqual(h._last_status, 200)
+
+    def test_auth_on_reads_stay_open(self):
+        with patch.object(objections, "OPERATOR_TOKEN", "sekret"):
+            h = self._req("GET", "/api/prompts")
+            self.assertEqual(h._last_status, 200)
+
+    def test_public_mode_wall_wins_over_auth(self):
+        # In public mode an operator route must 404 generically even with
+        # the CORRECT bearer — reachability is the wall, and a 401-vs-404
+        # difference would be a route-existence oracle.
+        with patch.object(objections, "OPERATOR_TOKEN", "sekret"), \
+             patch.object(objections, "PUBLIC_MODE", True):
+            h = self._req("POST", "/api/sessions", body=self.SESSION,
+                          bearer="sekret")
+            self.assertEqual(h._last_status, 404)
+            self.assertEqual(h._body_written,
+                             objections.GENERIC_404_HTML.encode("utf-8"))
+
+
+class TestPostureHonesty(FrontDoorCase):
+    """The posture string is quoted in mint responses and sealed receipts —
+    it must describe the mode the server is ACTUALLY in, sentence by
+    sentence, derived from live config. Changed text applies to NEW mints
+    only; stored rows are never rewritten."""
+
+    def _mint_posture(self, bearer=None):
+        p = self._open_promotion()
+        h = self._req("POST", f"/api/promotions/{p['id']}/tokens", body={},
+                      bearer=bearer)
+        self.assertEqual(h._last_status, 200)
+        return h._json()["posture"]
+
+    def test_auth_off_posture_discloses_no_credential_check(self):
+        posture = self._mint_posture()
+        self.assertIn("no credential check", posture)
+        self.assertIn("deployment posture", posture)
+        self.assertIn("not enforced auth", posture)
+        # it must NOT claim enforcement that is not configured
+        self.assertNotIn("requires 'Authorization", posture)
+
+    def test_auth_on_posture_discloses_bearer_enforcement(self):
+        with patch.object(objections, "OPERATOR_TOKEN", "sekret"):
+            posture = self._mint_posture(bearer="sekret")
+        # a false "no credential check" while a bearer check is active
+        # would be a false disclosure
+        self.assertNotIn("no credential check", posture)
+        self.assertNotIn("not enforced auth", posture)
+        self.assertIn("STUDIO_OPERATOR_TOKEN is set", posture)
+        self.assertIn("Bearer", posture)
+
+    def test_posture_discloses_public_mode_state(self):
+        # public mode OFF (this server serves everything)
+        self.assertIn("STUDIO_PUBLIC_MODE is off", self._mint_posture())
+        # public mode ON: mint still happens on the operator's (private)
+        # instance in real life; here we just assert the string flips.
+        with patch.object(objections, "PUBLIC_MODE", True):
+            self.assertIn("STUDIO_PUBLIC_MODE is on",
+                          objections.posture_note())
+            self.assertIn("only the tokenized objection surface",
+                          objections.posture_note())
+
+
 if __name__ == "__main__":
     unittest.main()

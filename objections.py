@@ -5,12 +5,15 @@ an account, and walks away with a receipt whose instructions let them verify
 their own objection against the hub with a checker they can run anywhere
 (GET <hub>/verify.mjs).
 
-HONEST POSTURE NOTE (owner decision, locked): the token mint/revoke routes
-are "operator-only" as DEPLOYMENT POSTURE — this server binds localhost and
-only the operator can reach it. That is NOT enforced auth: there is no
-credential check on these routes. Anyone who can reach the server can mint.
-Public hosting is a named pre-Sept-7 follow-up; do not expose this server
-until that lands.
+HONEST POSTURE NOTE (owner decision, locked; hardened in Task 13): whether
+the token mint/revoke routes are "operator-only" by DEPLOYMENT POSTURE
+(localhost binding, no credential check) or by ENFORCED bearer auth depends
+on live config — STUDIO_OPERATOR_TOKEN set means every state-changing
+operator route requires `Authorization: Bearer <token>`; unset means anyone
+who can reach the server can mint. posture_note() derives the disclosure
+from the actual config so it is never false. A public deployment must ALSO
+set STUDIO_PUBLIC_MODE=1, which walls off everything but the skeptic
+surface (/object/*).
 
 Token rules:
 - raw token: >= 32 bytes urlsafe from `secrets`, shown exactly ONCE in the
@@ -103,11 +106,35 @@ GENERIC_404_HTML = (
 # the hub. Mint-time text is prospective (no objector identity exists yet);
 # receipt-time text names the actual custodial identity.
 
-POSTURE_NOTE = (
-    '"operator-only" is deployment posture (this server is expected to bind '
-    "localhost), not enforced auth — there is no credential check on this "
-    "route. Do not expose this server publicly; public hosting is a named "
-    "pre-Sept-7 follow-up.")
+def posture_note():
+    """Honest, config-derived posture disclosure (Task 13). This string is
+    quoted in mint responses (and forwarded with invitations), so it must
+    describe the mode the server is ACTUALLY in — a 'no credential check'
+    sentence while a bearer check is active would be a false disclosure.
+    Derived from live config at call time; changed text applies to NEW
+    mints/receipts only (stored/sealed records keep the text they quoted)."""
+    if OPERATOR_TOKEN:
+        auth = (
+            "Operator routes on this server enforce bearer auth: "
+            "STUDIO_OPERATOR_TOKEN is set, and every state-changing operator "
+            "route requires 'Authorization: Bearer <token>' (constant-time "
+            "comparison; 401 otherwise).")
+    else:
+        auth = (
+            '"operator-only" is deployment posture (this server is expected '
+            "to bind localhost), not enforced auth — there is no credential "
+            "check on operator routes (STUDIO_OPERATOR_TOKEN is unset). Do "
+            "not expose this server publicly in this mode.")
+    if PUBLIC_MODE:
+        mode = (
+            " STUDIO_PUBLIC_MODE is on: this front door serves only the "
+            "tokenized objection surface (/object/*); every other route "
+            "answers a generic 404.")
+    else:
+        mode = (
+            " STUDIO_PUBLIC_MODE is off: all studio routes are served "
+            "(local development posture).")
+    return auth + mode
 
 CUSTODY_DISCLOSURE_MINT = (
     "Custody disclosure (DR-phase5-topology 5.6): objections filed through "
@@ -232,7 +259,7 @@ def mint_token(conn, pid, invitee_label=None, use_limit=1,
         "use_limit": use_limit,
         "invitee_label": invitee_label,
         "custody": CUSTODY_DISCLOSURE_MINT,
-        "posture": POSTURE_NOTE,
+        "posture": posture_note(),
     }
 
 

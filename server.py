@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import http.server
 import mimetypes
 import re
@@ -323,18 +325,56 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             return path.startswith('/api/object/')
         return False
 
+    def operator_authorized(self):
+        """True when no STUDIO_OPERATOR_TOKEN is configured (localhost
+        posture — current behavior), or when the request carries
+        `Authorization: Bearer <token>` matching it. Comparison is
+        constant-time over sha256 digests (hmac.compare_digest; hashing
+        first makes the comparison length-independent too)."""
+        expected = objections.OPERATOR_TOKEN
+        if not expected:
+            return True
+        header = self.headers.get('Authorization') or ''
+        supplied = header[len('Bearer '):] if header.startswith('Bearer ') else ''
+        return hmac.compare_digest(
+            hashlib.sha256(supplied.encode('utf-8')).digest(),
+            hashlib.sha256(expected.encode('utf-8')).digest())
+
+    def _send_unauthorized(self):
+        body = b"unauthorized\n"
+        self.send_response(401)
+        self.send_header('Content-Type', 'text/plain; charset=utf-8')
+        self.send_header('WWW-Authenticate', 'Bearer')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _front_door(self, method, route):
-        """The one public-mode gate on the dispatch path (Task 13).
+        """The one public-mode + operator-auth gate on the dispatch path
+        (Task 13).
 
         STUDIO_PUBLIC_MODE=1: every non-skeptic route — operator API, studio
         UI, static assets, unknown paths alike — answers the byte-identical
         generic 404 the token paths use. An outsider probing the front door
         cannot distinguish a walled-off route from a nonexistent one or from
         an invalid token (no route-existence oracle). The code being public
-        means the route LIST is not a secret; reachability is the wall."""
+        means the route LIST is not a secret; reachability is the wall.
+
+        Order matters: the public-mode wall runs FIRST, so on a public
+        deployment an operator route 404s generically rather than 401ing —
+        a 401 would be a route-existence oracle.
+
+        Auth: when STUDIO_OPERATOR_TOKEN is set, every state-changing verb
+        (POST/PUT/DELETE) outside the skeptic write surface (/api/object/*)
+        requires the bearer token."""
         path = self.path.split('?', 1)[0]
         if objections.PUBLIC_MODE and not self._skeptic_surface(method, path):
             self._send_generic_404_page()
+            return
+        if (method in ('POST', 'PUT', 'DELETE')
+                and not path.startswith('/api/object/')
+                and not self.operator_authorized()):
+            self._send_unauthorized()
             return
         route()
 
@@ -1161,8 +1201,10 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         mint an objection token (Slice 6). The raw token appears ONCE, in
         this response; only its hash is stored. Refuses 409 when the
         operator writer is unprovisioned (see objections.mint_token).
-        "Operator-only" is deployment posture (localhost), not enforced
-        auth — objections.POSTURE_NOTE rides on the response."""
+        "Operator-only" is enforced bearer auth when STUDIO_OPERATOR_TOKEN
+        is set (_front_door), deployment posture (localhost) otherwise —
+        objections.posture_note() derives the honest disclosure from live
+        config and rides on the response."""
         data = self.read_json_body()
         if data is None:
             return

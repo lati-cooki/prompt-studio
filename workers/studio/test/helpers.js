@@ -6,7 +6,8 @@ import { SELF, env, runInDurableObject } from 'cloudflare:test';
 import { SCHEMA } from '../src/do.js';
 
 // This pool version (0.18.x) does not expose isolatedStorage, so the single
-// named DO (idFromName('studio')) persists its SQL and in-memory limiter
+// named DO (idFromName('studio-prod') — matches src/index.js, bumped from
+// 'studio' at the Phase 8 cutover) persists its SQL and in-memory limiter
 // across every test in a run. resetStudio() gives each test a clean slate:
 // DROP every table (which drops its append-only triggers too — a plain
 // DELETE on object_refusals would abort) and rebuild from SCHEMA, restart
@@ -21,7 +22,7 @@ const STUDIO_TABLES = [
 ];
 
 export async function resetStudio() {
-  const stub = env.STUDIO.get(env.STUDIO.idFromName('studio'));
+  const stub = env.STUDIO.get(env.STUDIO.idFromName('studio-prod'));
   await runInDurableObject(stub, (instance, state) => {
     for (const t of STUDIO_TABLES) state.storage.sql.exec(`DROP TABLE IF EXISTS ${t}`);
     state.storage.sql.exec(SCHEMA);
@@ -99,7 +100,7 @@ export async function fileObjection(rawToken, body = {}, ip = '198.51.100.1') {
 // token HASH is stored). Runs inside the same singleton instance the
 // Worker routes to.
 export async function doSql(query, ...params) {
-  const stub = env.STUDIO.get(env.STUDIO.idFromName('studio'));
+  const stub = env.STUDIO.get(env.STUDIO.idFromName('studio-prod'));
   return runInDurableObject(stub, (_instance, state) =>
     state.storage.sql.exec(query, ...params).toArray());
 }

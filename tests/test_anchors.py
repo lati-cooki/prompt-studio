@@ -62,6 +62,11 @@ class TestFormatRow(unittest.TestCase):
         row = anchors.format_row("2026-07-12T00:00:00Z", "s", HEAD, 1, "t")
         self.assertTrue(row.endswith("| t |  |") or row.endswith("| t | |"))
 
+    def test_missing_records_count_renders_question_mark_not_none(self):
+        row = anchors.format_row("2026-07-12T00:00:00Z", "s", HEAD, None, "t", "n")
+        self.assertIn("| ? |", row)
+        self.assertNotIn("None", row)
+
 
 class TestAnchorSealSuccess(AnchorTestCase):
     @patch("anchors.subprocess.run", return_value=_proc(0))

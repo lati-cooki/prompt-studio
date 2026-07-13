@@ -33,7 +33,11 @@ def now_iso():
 def format_row(anchored_at, slug, head, records, thread_id, note=""):
     """One ANCHORS.md table row. Columns match the header seeded in ANCHORS.md:
     | anchored_at (ISO, UTC) | slug | head hash | records | hub thread id | note |
+
+    An unknown records count renders as "?" — the row (head testimony) is
+    still worth appending; "None" would read as a recorded value.
     """
+    records = "?" if records is None else records
     return f"| {anchored_at} | {slug} | {head} | {records} | {thread_id} | {note} |"
 
 

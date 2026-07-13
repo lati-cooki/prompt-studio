@@ -9,7 +9,7 @@ import os
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from unittest.mock import patch
 
@@ -33,11 +33,25 @@ VERIFIES = {
     "phase-4-ships": {"thread": "th_2", "slug": "phase-4-ships", "records": 9,
                       "head": HEAD_B, "valid": True},
 }
+# Record envelopes (GET /t/<slug>.json): founding is legacy single-custodial-
+# author era; phase-4-ships has distinct per-record writers (post-provisioning).
+RECORDS = {
+    "founding": [{"seq": 0, "author": "id_studio"},
+                 {"seq": 1, "author": "id_studio"},
+                 {"seq": 2, "author": "id_studio"}],
+    "phase-4-ships": [{"seq": 0, "author": "id_operator"},
+                      {"seq": 1, "author": "id_grader"},
+                      {"seq": 2, "author": "id_objector"},
+                      {"seq": 3, "author": "id_operator"}],
+}
 
 
 def fake_fetch(url):
     if url.endswith("/threads"):
         return [dict(t) for t in THREADS]
+    if url.endswith(".json"):
+        slug = url.split("/t/")[1].rsplit(".json", 1)[0]
+        return [dict(r) for r in RECORDS[slug]]
     slug = url.split("/t/")[1].split("/verify")[0]
     return dict(VERIFIES[slug])
 
@@ -57,7 +71,7 @@ class BackfillTestCase(unittest.TestCase):
     def _run(self, *extra):
         out = StringIO()
         with patch("scripts.anchor_backfill.fetch_json", side_effect=fake_fetch):
-            with redirect_stdout(out):
+            with redirect_stdout(out), redirect_stderr(out):
                 rc = ab.main(["--anchors", self.path, *extra])
         return rc, out.getvalue()
 
@@ -90,13 +104,33 @@ class TestExecute(BackfillTestCase):
         self.assertIn(f"| founding | {HEAD_A} | 14 | th_1 |", rows[0])
         self.assertIn(f"| phase-4-ships | {HEAD_B} | 9 | th_2 |", rows[1])
 
-    def test_backfill_note_is_the_two_timestamp_honesty(self):
+    def test_note_invariant_parts_on_every_row(self):
+        # the two-timestamp honesty never varies, whatever the custody regime
         self._run("--execute")
         for row in self._content()[len(HEADER):].splitlines():
-            self.assertIn(
-                "retroactive backfill; sealed under pre-Phase-5 custody "
-                "(single custodial studio author); anchored_at is the "
-                "backfill time, not the seal time", row)
+            self.assertIn("retroactive backfill;", row)
+            self.assertIn("anchored_at is the backfill time, not the seal time",
+                          row)
+
+    def test_single_author_thread_gets_pre_per_writer_clause(self):
+        # custody is DERIVED from the records, never asserted: one distinct
+        # author -> legacy custodial clause naming that author id
+        self._run("--execute")
+        founding = [r for r in self._content().splitlines()
+                    if "| founding |" in r][0]
+        self.assertIn("sealed under single custodial author id_studio "
+                      "(pre-per-writer era)", founding)
+        self.assertNotIn("per-record authors", founding)
+
+    def test_multi_author_thread_gets_per_record_clause(self):
+        # a post-provisioning thread must NOT testify to single-author custody
+        self._run("--execute")
+        p4 = [r for r in self._content().splitlines()
+              if "| phase-4-ships |" in r][0]
+        self.assertIn("per-record authors (3 distinct); custody regime "
+                      "legible per record (DR 5.3)", p4)
+        self.assertNotIn("single custodial author", p4)
+        self.assertNotIn("pre-Phase-5", p4)
 
     def test_execute_never_invokes_git(self):
         # the controller makes the one retroactive commit, not the script
@@ -174,6 +208,28 @@ class TestEdgeCases(BackfillTestCase):
         finally:
             with open(self.path, "w") as f:  # recreate for addCleanup
                 f.write(HEADER)
+
+    def test_fetch_failure_mid_run_is_clean_and_writes_nothing(self):
+        # a hub hiccup must name the thread and the failure, exit nonzero
+        # without a traceback, and — because rows are gathered before any
+        # write — append nothing
+        def fetch(url):
+            if url.endswith("/threads"):
+                return [dict(t) for t in THREADS]
+            if "/t/founding" in url:
+                return (dict(VERIFIES["founding"]) if url.endswith("/verify")
+                        else [dict(r) for r in RECORDS["founding"]])
+            raise ab.urllib.error.URLError("connection refused")
+
+        out, err = StringIO(), StringIO()
+        with patch("scripts.anchor_backfill.fetch_json", side_effect=fetch):
+            with redirect_stdout(out), redirect_stderr(err):
+                rc = ab.main(["--anchors", self.path, "--execute"])
+        self.assertNotEqual(rc, 0)
+        self.assertIn("phase-4-ships", err.getvalue())       # which thread
+        self.assertIn("connection refused", err.getvalue())  # what failed
+        self.assertNotIn("Traceback", err.getvalue())
+        self.assertEqual(self._content(), HEADER)            # nothing written
 
     def test_existing_keys_ignores_header_and_separator(self):
         keys = ab.existing_keys(self.path)

@@ -46,8 +46,10 @@ to support `objection resolve`, which it does not yet; that is a filed
 follow-up, not this slice. Do NOT hand-roll validator-bypassing events.
 """
 import hashlib
+import hmac
 import html
 import json
+import os
 import secrets
 import time
 from datetime import datetime, timezone
@@ -57,6 +59,35 @@ import seal
 import writers
 
 _TS = "%Y-%m-%dT%H:%M:%SZ"
+
+# ---------------------------------------------------------------------------
+# front-door config (Task 13 hosting hardening) — the ONE place the hosting
+# env is read. server.py consumes these module attributes at request time
+# (which also keeps them patchable in tests). server.py loads .env BEFORE
+# importing this module, so os.environ is complete here.
+
+
+def _parse_rate(spec):
+    """'10' -> (10, 60.0); '20/30' -> (20, 30.0): N requests per W seconds."""
+    count, _, window = (spec or "").partition("/")
+    return max(1, int(count)), (float(window) if window else 60.0)
+
+
+# STUDIO_PUBLIC_MODE=1 -> serve ONLY the skeptic surface (server._front_door).
+PUBLIC_MODE = os.environ.get("STUDIO_PUBLIC_MODE", "") == "1"
+# When set, every state-changing operator route requires
+# `Authorization: Bearer <token>` (constant-time check in server.py).
+OPERATOR_TOKEN = os.environ.get("STUDIO_OPERATOR_TOKEN") or None
+# Externally reachable base for share/receipt URLs (e.g.
+# https://objections.example.com). The Host header is NEVER used.
+PUBLIC_BASE_URL = (os.environ.get("STUDIO_PUBLIC_BASE_URL") or "").rstrip("/") or None
+# Externally reachable ThreadHub base for receipt URLs; falls back to the
+# local hub. A receipt must never hand an external skeptic a localhost URL
+# when a public base is configured.
+THREADHUB_PUBLIC_BASE_URL = (
+    os.environ.get("THREADHUB_PUBLIC_BASE_URL") or "").rstrip("/") or None
+# Rate limit for ALL /object/* and /api/object/* surfaces, per IP.
+RATE_LIMIT, RATE_WINDOW = _parse_rate(os.environ.get("STUDIO_OBJECT_RATE", "10/60"))
 
 # ---------------------------------------------------------------------------
 # generic 404 — one body per surface, byte-identical for every failure mode

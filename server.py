@@ -9,14 +9,6 @@ import sqlite3
 import urllib.request
 import urllib.error
 import urllib.parse
-import anchors
-import challenge
-import objections
-import seal
-import promotion_store
-import promotion_evidence
-import promotion_seal
-import writers
 
 def _load_dotenv(path=".env"):
     """Load key=value pairs from .env into os.environ (no-op if file absent)."""
@@ -31,7 +23,19 @@ def _load_dotenv(path=".env"):
     except FileNotFoundError:
         pass
 
+# BEFORE the local imports: objections.py reads the front-door env
+# (STUDIO_PUBLIC_MODE, STUDIO_OPERATOR_TOKEN, ...) at module top, so .env
+# must already be in os.environ when it is imported.
 _load_dotenv()
+
+import anchors
+import challenge
+import objections
+import seal
+import promotion_store
+import promotion_evidence
+import promotion_seal
+import writers
 
 try:
     import anthropic
@@ -298,7 +302,58 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header('Access-Control-Allow-Headers', 'Content-Type')
         super().end_headers()
 
+    # ── Task 13: the front door ────────────────────────────────────────────
+    # ONE dispatch-path gate: every verb handler (do_GET/do_POST/do_PUT/
+    # do_DELETE/do_OPTIONS) enters through _front_door before any routing.
+    # (do_HEAD is not gated: it already answers a uniform 404 for EVERY path
+    # in every mode — no differential, no oracle.)
+
+    @staticmethod
+    def _skeptic_surface(method, path):
+        """The ONLY surface a public deployment serves: the skeptic's
+        objection page, filing endpoint and receipt/status route.
+
+        Static assets: NONE, deliberately — objections.render_object_page is
+        fully self-contained (inline CSS + inline JS, no /js/ imports), so
+        the skeptic surface needs zero static files. Serving none keeps the
+        public surface minimal and leaves no file-existence oracle."""
+        if method == 'GET':
+            return path.startswith('/object/')
+        if method == 'POST':
+            return path.startswith('/api/object/')
+        return False
+
+    def _front_door(self, method, route):
+        """The one public-mode gate on the dispatch path (Task 13).
+
+        STUDIO_PUBLIC_MODE=1: every non-skeptic route — operator API, studio
+        UI, static assets, unknown paths alike — answers the byte-identical
+        generic 404 the token paths use. An outsider probing the front door
+        cannot distinguish a walled-off route from a nonexistent one or from
+        an invalid token (no route-existence oracle). The code being public
+        means the route LIST is not a secret; reachability is the wall."""
+        path = self.path.split('?', 1)[0]
+        if objections.PUBLIC_MODE and not self._skeptic_surface(method, path):
+            self._send_generic_404_page()
+            return
+        route()
+
+    def do_GET(self):
+        self._front_door('GET', self._route_GET)
+
+    def do_POST(self):
+        self._front_door('POST', self._route_POST)
+
+    def do_PUT(self):
+        self._front_door('PUT', self._route_PUT)
+
+    def do_DELETE(self):
+        self._front_door('DELETE', self._route_DELETE)
+
     def do_OPTIONS(self):
+        self._front_door('OPTIONS', self._route_OPTIONS)
+
+    def _route_OPTIONS(self):
         self.send_response(200, "ok")
         self.end_headers()
 
@@ -355,7 +410,7 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             return
         self.proxy_threadhub_get(f"/t/{slug}/verify")
 
-    def do_GET(self):
+    def _route_GET(self):
         if self.path == '/api/sessions':
             self.handle_get_sessions()
         elif self.path == '/api/prompts':
@@ -458,7 +513,7 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         except (FileNotFoundError, IsADirectoryError, PermissionError):
             self.send_error(404, f"File not found: {path}")
 
-    def do_POST(self):
+    def _route_POST(self):
         if self.path == '/api/sessions':
             self.handle_post_sessions()
         elif self.path.startswith('/api/prompts/'):
@@ -504,7 +559,7 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         else:
             self.send_error(404)
 
-    def do_PUT(self):
+    def _route_PUT(self):
         if self.path.startswith('/api/sessions/'):
             session_id = self.path.split('/')[-1]
             self.handle_put_session(session_id)
@@ -514,7 +569,7 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         else:
             self.send_error(404)
 
-    def do_DELETE(self):
+    def _route_DELETE(self):
         if self.path.startswith('/api/sessions/'):
             session_id = self.path.split('/')[-1]
             self.handle_delete_session(session_id)

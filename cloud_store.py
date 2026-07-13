@@ -40,7 +40,6 @@ import promotion_store
 # per-case and so an operator can point the laptop at the cloud without a
 # restart-order dependency. STUDIO_CLOUD_BASE_URL unset is a misconfiguration
 # here (server.py only routes to this module when it IS set), surfaced loudly.
-_TIMEOUT = float(os.environ.get("STUDIO_CLOUD_TIMEOUT", "15"))
 
 # mint_token's deliberation_slug sentinel: absent (leave the association
 # alone) is distinct from an explicit null (clear it). Mirrors
@@ -54,6 +53,10 @@ def _base():
 
 def _token():
     return os.environ.get("STUDIO_CLOUD_TOKEN") or ""
+
+
+def _timeout():
+    return float(os.environ.get("STUDIO_CLOUD_TIMEOUT", "15"))
 
 
 def _error_message(raw):
@@ -86,7 +89,7 @@ def _request(method, path, body=None):
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+        with urllib.request.urlopen(req, timeout=_timeout()) as resp:
             raw = resp.read().decode("utf-8")
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", errors="replace") if e.fp else ""

@@ -411,6 +411,29 @@ class TestServerCloudSwitch(CloudStoreCase):
         self.assertEqual(self._last()["path"],
                          "/api/promotions/5/objections/2/resolve")
 
+    def test_get_promotions_renders_cloud_error_not_uncaught(self):
+        # a cloud non-2xx (here 502) must reach the client as a clean JSON
+        # error with its status, not bubble as an uncaught PromotionError.
+        self._respond({"error": "cloud unreachable"}, status=502)
+        h = self._handler()
+        h.handle_get_promotions()
+        self.assertEqual(h.sent[-1], ({"error": "cloud unreachable"}, 502))
+
+    def test_get_metrics_renders_cloud_error_not_uncaught(self):
+        self._respond({"error": "cloud unreachable"}, status=502)
+        h = self._handler()
+        h.path = "/api/promotions/metrics"
+        h.handle_get_promotion_metrics()
+        self.assertEqual(h.sent[-1], ({"error": "cloud unreachable"}, 502))
+
+    def test_get_object_refusals_renders_cloud_error_not_uncaught(self):
+        self._respond({"error": "cloud unreachable"}, status=502)
+        h = self._handler()
+        h.path = "/api/object-refusals"
+        h.operator_authorized = lambda: True
+        h.handle_get_object_refusals()
+        self.assertEqual(h.sent[-1], ({"error": "cloud unreachable"}, 502))
+
     def test_close_routes_through_cloud_then_flips_local_prompt(self):
         # cloud acks the close; the handler then flips the LOCAL prompt to
         # production (the DO cannot touch the laptop prompts table).

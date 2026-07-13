@@ -71,15 +71,17 @@ def _fetch(url, what):
 def custody_clause(envelopes):
     """Derive the custody clause from the thread's actual record authors.
 
-    Rows testify to the past AS IT WAS: one distinct author is the legacy
-    custodial-studio pattern; more than one means per-record writers exist
-    and the row must not imply single-author custody (DR 5.3)."""
+    Rows testify to the past AS IT WAS, and the whole clause is observed
+    fact — no era is asserted, since a post-provisioning thread can
+    legitimately have one distinct author (e.g. an operator-only waived
+    promotion). More than one author means per-record writers exist and the
+    row must not imply single-author custody (DR 5.3)."""
     authors = {e.get("author") for e in envelopes
                if isinstance(e, dict) and e.get("author")}
     if len(authors) == 1:
         only = next(iter(authors))
         return (f"sealed under single custodial author {only} "
-                "(pre-per-writer era)")
+                "(one distinct record author)")
     return (f"per-record authors ({len(authors)} distinct); "
             "custody regime legible per record (DR 5.3)")
 

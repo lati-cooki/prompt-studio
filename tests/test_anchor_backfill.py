@@ -112,15 +112,18 @@ class TestExecute(BackfillTestCase):
             self.assertIn("anchored_at is the backfill time, not the seal time",
                           row)
 
-    def test_single_author_thread_gets_pre_per_writer_clause(self):
-        # custody is DERIVED from the records, never asserted: one distinct
-        # author -> legacy custodial clause naming that author id
+    def test_single_author_thread_gets_derived_single_author_clause(self):
+        # custody is DERIVED from the records, never asserted — including the
+        # parenthetical: "(one distinct record author)" is observed fact, not
+        # an era claim (a post-provisioning thread can legitimately have one
+        # distinct author, e.g. operator-only waived promotions)
         self._run("--execute")
         founding = [r for r in self._content().splitlines()
                     if "| founding |" in r][0]
         self.assertIn("sealed under single custodial author id_studio "
-                      "(pre-per-writer era)", founding)
+                      "(one distinct record author)", founding)
         self.assertNotIn("per-record authors", founding)
+        self.assertNotIn("era", founding)  # no asserted-era wording anywhere
 
     def test_multi_author_thread_gets_per_record_clause(self):
         # a post-provisioning thread must NOT testify to single-author custody
@@ -131,6 +134,7 @@ class TestExecute(BackfillTestCase):
                       "legible per record (DR 5.3)", p4)
         self.assertNotIn("single custodial author", p4)
         self.assertNotIn("pre-Phase-5", p4)
+        self.assertNotIn("era", p4)
 
     def test_execute_never_invokes_git(self):
         # the controller makes the one retroactive commit, not the script

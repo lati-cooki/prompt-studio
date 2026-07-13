@@ -79,7 +79,10 @@ export default {
     const path = url.pathname;
     const method = request.method;
     try {
-      const stub = env.STUDIO.get(env.STUDIO.idFromName('studio'));
+      // DO instance name bumped 'studio'->'studio-prod' at the
+      // consensusprotocol.ai cutover for a fresh, clean DO (staging held smoke
+      // artifacts; a SQLite DO can't be wiped in place).
+      const stub = env.STUDIO.get(env.STUDIO.idFromName('studio-prod'));
       // (1) The public skeptic surface — the DO rate-limits BEFORE
       // validating anything, per-IP via CF-Connecting-IP (never a
       // client-settable header on Cloudflare).

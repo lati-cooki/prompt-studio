@@ -45,9 +45,14 @@
     "OBJECT_RATE": "10/60"
   },
 
-  "observability": { "enabled": true }
+  "observability": { "enabled": true },
 
-  // NO routes / custom domain yet: staging runs on workers.dev first; the
-  // consensusprotocol.ai custom domain lands at cutover (plan phase 8),
-  // after the ANCHORS.md head byte-match gate.
+  // consensusprotocol.ai cutover (phase 8): the skeptic surface + operator API
+  // on the apex. These more-specific routes take precedence over the hub's
+  // apex custom domain for /object/* and /api/*; the DNS record already exists
+  // (created by the hub's custom domain).
+  "routes": [
+    { "pattern": "consensusprotocol.ai/object/*", "zone_name": "consensusprotocol.ai" },
+    { "pattern": "consensusprotocol.ai/api/*", "zone_name": "consensusprotocol.ai" }
+  ]
 }

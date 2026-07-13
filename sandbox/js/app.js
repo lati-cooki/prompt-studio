@@ -16,7 +16,7 @@ import { paneContext } from './seal-extract.js';
 import { createRegistryPanel } from './registry-panel.js';
 import { createModelSelector } from './model-selector.js';
 import * as api from './api.js';
-import { resolveView, homeState } from './view.js';
+import { resolveView, homeState, promotionMetricsLabel } from './view.js';
 
 // ── App state ──────────────────────────────────────────
 const activePaneMap      = {};
@@ -268,6 +268,31 @@ const $sessionsRail  = document.getElementById("sessions-rail");
 const $topbar        = document.querySelector(".topbar");
 const $sessionsViewList = document.getElementById('sessions-view-list');
 
+// ── Decisions header metrics ─────────────────────────────
+// Slice 5 (DR-2026-07-12-fcp-metrics): the current all-time waive/contested
+// ratios, shown from day one. Same fetch-and-degrade pattern as renderHome:
+// an unreachable endpoint discloses, it never breaks the view.
+const $decisionsHeader  = document.getElementById('decisions-header');
+const $decisionsMetrics = document.getElementById('decisions-metrics');
+async function renderDecisionsMetrics() {
+  if (!$decisionsMetrics) return;
+  let label = null, title = '';
+  try {
+    const r = await fetch('/api/promotions/metrics');
+    if (r.ok) {
+      const m = await r.json();
+      label = promotionMetricsLabel(m);
+      title = [
+        'all-time terminal FCP outcomes',
+        m?.contested_data,
+        m?.computed_at ? `computed ${m.computed_at}` : '',
+      ].filter(Boolean).join(' · ');
+    }
+  } catch (e) { /* endpoint unreachable — fall through to disclosure */ }
+  $decisionsMetrics.textContent = label ? `FCP: ${label}` : 'FCP metrics unavailable';
+  $decisionsMetrics.title = title;
+}
+
 // ── Home hub renderer ────────────────────────────────────
 async function renderHome() {
   let sessionCount = 0, decisions = [];
@@ -335,6 +360,8 @@ function showView(raw) {
   // Embedded views (lazy src on first show)
   $registryFrame.style.display  = isRegistry  ? "block" : "none";
   $decisionsFrame.style.display = isDecisions ? "block" : "none";
+  if ($decisionsHeader) $decisionsHeader.style.display = isDecisions ? "flex" : "none";
+  if (isDecisions) renderDecisionsMetrics();
   if (isDecisions && !$decisionsFrame.src && $decisionsFrame.dataset.src) {
     $decisionsFrame.src = $decisionsFrame.dataset.src;
   }

@@ -9,6 +9,16 @@ import json
 from datetime import datetime, timedelta, timezone
 
 OPEN, CLOSED, WAIVED, ABORTED = "open", "closed", "waived", "aborted"
+# Terminal FCP outcomes — every state a promotion can end in. OPEN is the
+# only non-terminal state; there is no other. Sealed immutable by
+# DR-2026-07-12-fcp-metrics: changing this tuple's meaning requires a NEW
+# metric name by DR amendment, never a redefinition.
+TERMINAL_STATES = (CLOSED, WAIVED, ABORTED)
+# Disclosure strings for externally_contested_ratio (DR-2026-07-12-fcp-metrics):
+# before Slice 6 the fcp_tokens table does not exist, so the contested count
+# is an absence of measurement, not a measured zero — say so.
+CONTESTED_DATA_ABSENT = "no token table yet (pre-Slice-6); 0 invitations recorded"
+CONTESTED_DATA_MEASURED = "fcp_tokens table present; invitations measured"
 _TS = "%Y-%m-%dT%H:%M:%SZ"
 
 
@@ -49,6 +59,69 @@ def list_promotions(conn):
     ids = [r["id"] for r in conn.execute(
         "SELECT id FROM promotions ORDER BY id DESC")]
     return [get_promotion(conn, i) for i in ids]
+
+
+def _has_fcp_tokens_table(conn):
+    # Same guarded pragma-table_info pattern as server.migrate_actor_columns:
+    # a table with no columns is a table that does not exist.
+    return bool({r[1] for r in conn.execute("PRAGMA table_info(fcp_tokens)")})
+
+
+def metrics(conn, window_days=None):
+    """Waive-ratio metrics per DR-2026-07-12-fcp-metrics. Definitions are
+    sealed immutable in that DR — the formulas below must match it verbatim:
+
+    - fcp_waive_ratio(window_days) = count(terminal outcomes in window where
+      state == 'waived') / count(terminal outcomes in window)
+    - externally_contested_ratio(window_days) = count(terminal outcomes in
+      window whose FCP window had >= 1 token invitation) / count(terminal
+      outcomes in window)
+    - terminal outcomes: promotions.state in TERMINAL_STATES
+      ('closed', 'waived', 'aborted'); resolved_at is the outcome timestamp
+    - window: resolved_at >= now - window_days; window_days None = all-time
+    - denominator 0 -> both ratios None (JSON null) with counts, never a
+      fabricated 0.0
+
+    Slice 6 query contract (pinned by tests/test_promotion_metrics.py before
+    the table exists): fcp_tokens carries one row per token invitation with
+    at least promotion_id (INTEGER, references promotions.id) and minted_at
+    (TEXT, UTC %Y-%m-%dT%H:%M:%SZ). A terminal outcome counts as externally
+    contested when >= 1 fcp_tokens row has promotion_id = promotions.id AND
+    minted_at < resolved_at (invitation minted strictly before the outcome).
+    Until the table exists, invited = 0 and contested_data discloses the
+    absence of measurement instead of pretending a measured zero.
+    """
+    where = f"p.state IN ({','.join('?' * len(TERMINAL_STATES))})"
+    params = list(TERMINAL_STATES)
+    if window_days is not None:
+        where += " AND p.resolved_at >= ?"
+        params.append(_iso(_now() - timedelta(days=float(window_days))))
+    total = conn.execute(
+        f"SELECT COUNT(*) FROM promotions p WHERE {where}", params).fetchone()[0]
+    waived = conn.execute(
+        f"SELECT COUNT(*) FROM promotions p WHERE {where} AND p.state=?",
+        params + [WAIVED]).fetchone()[0]
+    if _has_fcp_tokens_table(conn):
+        invited = conn.execute(
+            f"""SELECT COUNT(*) FROM promotions p WHERE {where}
+                AND EXISTS (SELECT 1 FROM fcp_tokens t
+                            WHERE t.promotion_id = p.id
+                              AND t.minted_at < p.resolved_at)""",
+            params).fetchone()[0]
+        contested_data = CONTESTED_DATA_MEASURED
+    else:
+        invited = 0
+        contested_data = CONTESTED_DATA_ABSENT
+    return {
+        "window_days": window_days,
+        "terminal_total": total,
+        "waived": waived,
+        "fcp_waive_ratio": (waived / total) if total else None,
+        "invited": invited,
+        "externally_contested_ratio": (invited / total) if total else None,
+        "contested_data": contested_data,
+        "computed_at": _iso(_now()),
+    }
 
 
 def open_promotion(conn, prompt_id, version, window_hours=24.0, evidence=None,

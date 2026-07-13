@@ -8,6 +8,7 @@ import logging
 import sqlite3
 import urllib.request
 import urllib.error
+import urllib.parse
 import anchors
 import seal
 import promotion_store
@@ -363,6 +364,8 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
             self.serve_file('registry/' + rel)
         elif self.path == '/api/promotions':
             self.handle_get_promotions()
+        elif self.path.split('?', 1)[0] == '/api/promotions/metrics':
+            self.handle_get_promotion_metrics()
         elif self.path.startswith('/api/promotions/'):
             self.handle_get_promotion(self.path.removeprefix('/api/promotions/'))
         elif self.path == '/api/threads' or self.path.startswith('/api/threads?'):
@@ -883,6 +886,30 @@ class PromptStudioHandler(http.server.SimpleHTTPRequestHandler):
         conn = self.get_db()
         try:
             self.send_json(promotion_store.list_promotions(conn))
+        finally:
+            conn.close()
+
+    def handle_get_promotion_metrics(self):
+        """GET /api/promotions/metrics?window=<days> — Slice 5 waive-ratio
+        metrics (DR-2026-07-12-fcp-metrics). window is a whole number of
+        days; absent means all-time."""
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        raw = query.get("window", [None])[0]
+        window_days = None
+        if raw is not None:
+            try:
+                window_days = int(raw)
+            except ValueError:
+                self.send_json({"error": "window must be a whole number of days"},
+                               status=422)
+                return
+            if window_days <= 0:
+                self.send_json({"error": "window must be a positive number of days"},
+                               status=422)
+                return
+        conn = self.get_db()
+        try:
+            self.send_json(promotion_store.metrics(conn, window_days))
         finally:
             conn.close()
 

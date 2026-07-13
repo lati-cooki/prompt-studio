@@ -54,9 +54,18 @@ def _objection_texts(promotion):
     return out
 
 
-def build_seal_payload(promotion, outcome, decided_by):
+def _decided_by_name(decided_by_writer):
+    """Accept a writer row (dict from writers.py — uses its display_name) or a
+    plain display string (legacy callers)."""
+    if isinstance(decided_by_writer, dict):
+        return decided_by_writer["display_name"]
+    return decided_by_writer
+
+
+def build_seal_payload(promotion, outcome, decided_by_writer):
     if outcome not in ("promoted", "aborted"):
         raise ValueError(f"invalid outcome: {outcome!r}")
+    decided_by = _decided_by_name(decided_by_writer)
     pid, ver = promotion["prompt_id"], promotion["version"]
     if outcome == "promoted":
         decision = f"{pid} {ver} promoted to production. FCP: "

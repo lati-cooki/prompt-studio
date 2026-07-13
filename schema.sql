@@ -65,7 +65,9 @@ CREATE TABLE IF NOT EXISTS promotions (
     citation_hash TEXT,
     sealed INTEGER NOT NULL DEFAULT 0,
     seal_error TEXT,
-    waive_reason TEXT
+    waive_reason TEXT,
+    opened_by TEXT,
+    resolved_by TEXT
 );
 
 CREATE TABLE IF NOT EXISTS promotion_objections (
@@ -74,5 +76,10 @@ CREATE TABLE IF NOT EXISTS promotion_objections (
     raised_at TEXT NOT NULL,
     body TEXT NOT NULL,
     resolution TEXT,
-    resolution_body TEXT
+    resolution_body TEXT,
+    author_writer TEXT,
+    resolved_by TEXT,
+    channel TEXT,
+    token_id TEXT,
+    sealed_record_hash TEXT
 );

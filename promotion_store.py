@@ -51,7 +51,8 @@ def list_promotions(conn):
     return [get_promotion(conn, i) for i in ids]
 
 
-def open_promotion(conn, prompt_id, version, window_hours=24.0, evidence=None):
+def open_promotion(conn, prompt_id, version, window_hours=24.0, evidence=None,
+                   actor="operator"):
     row = conn.execute("SELECT status FROM prompts WHERE id=? AND version=?",
                        (prompt_id, version)).fetchone()
     if row is None:
@@ -68,10 +69,11 @@ def open_promotion(conn, prompt_id, version, window_hours=24.0, evidence=None):
     closes = opened + timedelta(hours=float(window_hours))
     cur = conn.execute(
         """INSERT INTO promotions
-           (prompt_id, version, state, opened_at, window_hours, closes_at, evidence_json)
-           VALUES (?,?,?,?,?,?,?)""",
+           (prompt_id, version, state, opened_at, window_hours, closes_at,
+            evidence_json, opened_by)
+           VALUES (?,?,?,?,?,?,?,?)""",
         (prompt_id, version, OPEN, _iso(opened), float(window_hours), _iso(closes),
-         json.dumps(evidence) if evidence is not None else None))
+         json.dumps(evidence) if evidence is not None else None, actor))
     conn.commit()
     return get_promotion(conn, cur.lastrowid)
 
@@ -83,20 +85,21 @@ def _require_open(conn, pid):
     return p
 
 
-def add_objection(conn, pid, body):
+def add_objection(conn, pid, body, actor="operator"):
     _require_open(conn, pid)
     body = (body or "").strip()
     if not body:
         raise PromotionError("objection body required", 422)
     cur = conn.execute(
-        "INSERT INTO promotion_objections (promotion_id, raised_at, body) VALUES (?,?,?)",
-        (pid, _iso(_now()), body))
+        """INSERT INTO promotion_objections (promotion_id, raised_at, body, author_writer)
+           VALUES (?,?,?,?)""",
+        (pid, _iso(_now()), body, actor))
     conn.commit()
     return dict(conn.execute("SELECT * FROM promotion_objections WHERE id=?",
                              (cur.lastrowid,)).fetchone())
 
 
-def resolve_objection(conn, pid, oid, resolution, body):
+def resolve_objection(conn, pid, oid, resolution, body, actor="operator"):
     _require_open(conn, pid)
     if resolution not in ("responded", "upheld"):
         raise PromotionError("resolution must be 'responded' or 'upheld'", 422)
@@ -111,11 +114,13 @@ def resolve_objection(conn, pid, oid, resolution, body):
     if row["resolution"] is not None:
         raise PromotionError("objection already resolved", 409)
     conn.execute(
-        "UPDATE promotion_objections SET resolution=?, resolution_body=? WHERE id=?",
-        (resolution, body, oid))
+        """UPDATE promotion_objections SET resolution=?, resolution_body=?, resolved_by=?
+           WHERE id=?""",
+        (resolution, body, actor, oid))
     conn.commit()
     if resolution == "upheld":
-        return _terminate(conn, pid, ABORTED)  # upheld objection forces abort
+        # upheld objection forces abort; the resolver is the terminating actor
+        return _terminate(conn, pid, ABORTED, actor=actor)
     return get_promotion(conn, pid)
 
 
@@ -135,19 +140,20 @@ def _flip_to_production(conn, prompt_id, version, validated):
             (prompt_id, version))
 
 
-def _terminate(conn, pid, state, waive_reason=None, flip=False):
+def _terminate(conn, pid, state, waive_reason=None, flip=False, actor="operator"):
     p = _require_open(conn, pid)
     if flip:
         _flip_to_production(conn, p["prompt_id"], p["version"],
                             validated=p["evidence"] is not None)
     conn.execute(
-        "UPDATE promotions SET state=?, resolved_at=?, waive_reason=? WHERE id=?",
-        (state, _iso(_now()), waive_reason, pid))
+        """UPDATE promotions SET state=?, resolved_at=?, waive_reason=?, resolved_by=?
+           WHERE id=?""",
+        (state, _iso(_now()), waive_reason, actor, pid))
     conn.commit()
     return get_promotion(conn, pid)
 
 
-def close_promotion(conn, pid):
+def close_promotion(conn, pid, actor="operator"):
     p = _require_open(conn, pid)
     if not p["window_elapsed"]:
         raise PromotionError(
@@ -155,18 +161,18 @@ def close_promotion(conn, pid):
     if p["unresolved_objections"]:
         raise PromotionError(
             f"{p['unresolved_objections']} unresolved objection(s) block close", 409)
-    return _terminate(conn, pid, CLOSED, flip=True)
+    return _terminate(conn, pid, CLOSED, flip=True, actor=actor)
 
 
-def waive_promotion(conn, pid, reason):
+def waive_promotion(conn, pid, reason, actor="operator"):
     reason = (reason or "").strip()
     if not reason:
         raise PromotionError("waive reason required", 422)
-    return _terminate(conn, pid, WAIVED, waive_reason=reason, flip=True)
+    return _terminate(conn, pid, WAIVED, waive_reason=reason, flip=True, actor=actor)
 
 
-def abort_promotion(conn, pid):
-    return _terminate(conn, pid, ABORTED)
+def abort_promotion(conn, pid, actor="operator"):
+    return _terminate(conn, pid, ABORTED, actor=actor)
 
 
 def mark_seal_result(conn, pid, slug=None, citation_hash=None, error=None):

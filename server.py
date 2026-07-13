@@ -101,6 +101,30 @@ def migrate_db(conn):
         raise
 
 
+def migrate_actor_columns(conn):
+    """Phase 5 slice 2 (writer identity everywhere): thread the acting writer
+    through promotions and objections. Guarded pragma-table_info ALTERs —
+    idempotent, and a no-op on DBs that don't have the tables yet (schema.sql
+    creates them with these columns included). Pre-migration rows keep NULL:
+    the historical actor is unknown, not backfilled."""
+    def _cols(table):
+        return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+
+    additions = {
+        "promotions": ("opened_by", "resolved_by"),
+        "promotion_objections": ("author_writer", "resolved_by", "channel",
+                                 "token_id", "sealed_record_hash"),
+    }
+    for table, wanted in additions.items():
+        have = _cols(table)
+        if not have:
+            continue  # table doesn't exist yet; schema.sql will create it complete
+        for col in wanted:
+            if col not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} TEXT")
+    conn.commit()
+
+
 def migrate_sessions(conn):
     """Migrate sessions table from the old Flask schema (data TEXT) to the current schema
     (panes TEXT + vault_config TEXT).  Preserves existing session data."""
@@ -235,6 +259,7 @@ def init_db():
     try:
         migrate_sessions(conn)
         migrate_db(conn)
+        migrate_actor_columns(conn)
         conn.executescript(schema)
         conn.commit()
         _seed_prompts_from_index(conn)

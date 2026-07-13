@@ -146,8 +146,9 @@ def posture_note():
     if PUBLIC_MODE:
         mode = (
             " STUDIO_PUBLIC_MODE is on: this front door serves only the "
-            "tokenized objection surface (/object/*); every other route "
-            "answers a generic 404.")
+            "tokenized objection surface (/object/* pages and receipts, "
+            "/api/object/* filing); every other route answers a generic "
+            "404.")
     else:
         mode = (
             " STUDIO_PUBLIC_MODE is off: all studio routes are served "

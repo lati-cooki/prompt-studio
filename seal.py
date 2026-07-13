@@ -17,6 +17,9 @@ THREADHUB_PORT = int(os.environ.get("THREADHUB_PORT", "8110"))
 # _th) at the remote hub with no further edits.
 THREADHUB_BASE_URL = (os.environ.get("THREADHUB_BASE_URL") or "").rstrip("/") or None
 THREADHUB_WRITE_TOKEN = os.environ.get("THREADHUB_WRITE_TOKEN") or None
+# Cloudflare's edge returns 403 to requests with the Python-urllib default
+# User-Agent, so every studio->hub call must send a custom UA.
+USER_AGENT = "clista-operator/1.0"
 AUTHOR_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".seal_author_id")
 
 
@@ -115,6 +118,7 @@ def _th(method, path, body=None):
     headers = {"Content-Type": "application/json"} if data is not None else {}
     if THREADHUB_WRITE_TOKEN:
         headers["Authorization"] = f"Bearer {THREADHUB_WRITE_TOKEN}"
+    headers["User-Agent"] = USER_AGENT
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:

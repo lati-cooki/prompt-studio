@@ -208,6 +208,21 @@ class TestThreadHubWrite(unittest.TestCase):
             seal._th("GET", "/threads")
         self.assertEqual(ctx.exception.status, 502)
 
+    @patch("seal.urllib.request.urlopen")
+    def test_th_sends_custom_user_agent(self, urlopen):
+        # Cloudflare's edge 403s the default Python-urllib UA, so _th must send
+        # a custom User-Agent on every studio->hub request.
+        captured = {}
+
+        def side_effect(req, timeout=None):
+            captured["req"] = req
+            return _Resp({"ok": True})
+
+        urlopen.side_effect = side_effect
+        seal._th("GET", "/threads")
+        # urllib normalizes header keys to title-case (User-agent)
+        self.assertEqual(captured["req"].get_header("User-agent"), seal.USER_AGENT)
+
 
 def _capture_requests(bodies):
     """Return (urlopen side_effect, captured list). Captures (method, url, data bytes)."""
